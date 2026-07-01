@@ -33,7 +33,7 @@ void benchmark(std::string const& model, bool dimension_fixing) {
     config.fix_dimensions = dimension_fixing;
 
     auto start = std::chrono::high_resolution_clock::now();
-    auto result = simplification::simplify(P, config);
+    auto result = simplification::simplify_ipx_simplex(P, config);
     auto end = std::chrono::high_resolution_clock::now();
     double elapsed = std::chrono::duration<double>(end-start).count();
 

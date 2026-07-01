@@ -233,5 +233,291 @@ namespace simplification {
 
         return result;
     }
+
+    // Simplifies the MetabolicPolytope by detecting redundant bounds and fixing degenerate
+    // dimensions. Redundant bounds are relaxed to +-inf (making the variables free), and
+    // fixed dimensions are moved out of the box bounds and into A_eq as new equality rows
+    // x_k = mid. 
+    //
+    // The returned polytope will generally have more free variables in b_l/b_u and more rows
+    // in A_eq than the input while describing the same region (up to numerical tolerance).
+    // @tparam Point the point type of the polytope
+    // @param P the input MetabolicPolytope
+    // @param config the simplification config
+    // @return the simplified MetabolicPolytope
+    template <typename Point>
+    Result<Point> simplify_primal_dual(MetabolicPolytope<Point> const& P, 
+                                       Config const& config = Config{}) 
+    {               
+        typedef typename MetabolicPolytope<Point>::NT NT;
+
+        auto is_free = [](double bl, double bu){return std::isinf(bu) && std::isinf(bl);};
+        auto fix_dimension = [](Highs & highs, unsigned k, NT val) {
+            HighsInt id = k;
+            double coeff = 1.0;
+            highs.addRow((double)val, (double)val, 1, &id, &coeff);
+            highs.changeColBounds(k, -kHighsInf, kHighsInf);
+        };
+
+        unsigned d = P.getDimension();
+
+        Highs highs;
+        highs.setOptionValue("output_flag", false);
+        highs.setOptionValue("solver", "simplex");
+        highs.setOptionValue("presolve", "off");
+        highs.setOptionValue("simplex_strategy", 4);
+        build_lp_model(P, highs);
+
+        // Verifies the LP is not empty
+        highs.run();
+        if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+            Result<Point> result;
+            result.success = false;
+            result.P = P;
+            return result;
+        }
+        bool have_carry_basis = true;
+        HighsBasis carry_basis = highs.getBasis();
+
+        bool simplified = false;
+        while (!simplified) {
+            simplified = true;
+            for (unsigned k = 0; k < d; ++k) {
+                double bl = highs.getLp().col_lower_[k];
+                double bu = highs.getLp().col_upper_[k];
+
+                if (is_free(bl, bu)) continue;     // Skips removed constraints or equalities
+
+                highs.changeColCost(k, 1.0);
+
+                // LP1: max with current bounds
+                highs.changeObjectiveSense(ObjSense::kMaximize);
+                highs.setOptionValue("simplex_strategy", 4);
+                if (have_carry_basis) highs.setBasis(carry_basis);
+                highs.run();
+                HighsBasis basis_lp1 = highs.getBasis();
+                NT max_val = (NT)highs.getObjectiveValue();
+
+                // LP2: max with relaxed bound
+                // Skipped if there is no upper bound
+                bool upper_redundant = false;
+                if (!std::isinf(bu)) {
+                    highs.changeColBounds(k, bl, bu+1.0);
+                    highs.setOptionValue("simplex_strategy", 1);
+                    highs.setBasis(basis_lp1);
+                    highs.run();
+                    NT max_val_relaxed = (NT)highs.getObjectiveValue();
+                    highs.changeColBounds(k, bl, bu);
+                    upper_redundant = std::abs(max_val_relaxed-max_val) < config.facet_tolerance;
+                }
+
+                // LP3: min with current bounds
+                highs.changeObjectiveSense(ObjSense::kMinimize);
+                highs.setOptionValue("simplex_strategy", 4);
+                highs.setBasis(basis_lp1);
+                highs.run();
+                HighsBasis basis_lp3 = highs.getBasis();
+                NT min_val = (NT)highs.getObjectiveValue();
+
+                // LP4: min with relaxed bound
+                // Skipped if there is no lower bound
+                bool lower_redundant = false;
+                if (!std::isinf(bl)) {
+                    highs.changeColBounds(k, bl-1.0, bu);
+                    highs.setOptionValue("simplex_strategy", 1);
+                    highs.setBasis(basis_lp3);
+                    highs.run();
+                    NT min_val_relaxed = (NT)highs.getObjectiveValue();
+                    highs.changeColBounds(k, bl, bu);
+                    lower_redundant = std::abs(min_val_relaxed-min_val) < config.facet_tolerance;
+                    
+                    carry_basis = highs.getBasis(); // use lp4 basis
+                    have_carry_basis = true;
+                } else {                            // Use lp3 basis instead
+                    carry_basis = basis_lp3;
+                    have_carry_basis = true;
+                }
+
+                highs.changeColCost(k, 0.0);
+
+                bool tight = std::abs(max_val - min_val) < config.dim_tolerance;
+
+                // Case1: Fix dimensions
+                if (config.fix_dimensions && tight) {
+                    NT mid = (max_val+min_val)/NT(2);
+                    fix_dimension(highs, k, mid);
+                    have_carry_basis = false;
+                    simplified = false;
+                    continue;
+                }
+
+                // Case2: Relax bounds
+                if (upper_redundant && !std::isinf(bu)) {
+                    highs.changeColBounds(k, bl, kHighsInf);
+                    bu = highs.getLp().col_upper_[k];
+                    simplified = false;
+                } 
+                if (lower_redundant && !std::isinf(bl)) {
+                    highs.changeColBounds(k, -kHighsInf, bu);
+                    simplified = false;
+                }
+            }
+
+        }
+
+
+        Result<Point> result;
+        MetabolicPolytope<Point> Pnew;
+        build_simplified_polytope(highs, Pnew);
+        result.dims_fixed = Pnew.getNumEqualities()-P.getNumEqualities();
+        result.bounds_relaxed = P.getNumFiniteBounds()-Pnew.getNumFiniteBounds();
+        result.P = Pnew;
+
+        return result;
+    }
+
+    // Simplifies the MetabolicPolytope by detecting redundant bounds and fixing degenerate
+    // dimensions. Redundant bounds are relaxed to +-inf (making the variables free), and
+    // fixed dimensions are moved out of the box bounds and into A_eq as new equality rows
+    // x_k = mid. 
+    //
+    // The returned polytope will generally have more free variables in b_l/b_u and more rows
+    // in A_eq than the input while describing the same region (up to numerical tolerance).
+    // @tparam Point the point type of the polytope
+    // @param P the input MetabolicPolytope
+    // @param config the simplification config
+    // @return the simplified MetabolicPolytope
+    template <typename Point>
+    Result<Point> simplify_ipx_simplex(MetabolicPolytope<Point> const& P, 
+                               Config const& config = Config{}) 
+    {               
+        typedef typename MetabolicPolytope<Point>::NT NT;
+
+        auto is_free = [](double bl, double bu){return std::isinf(bu) && std::isinf(bl);};
+        auto fix_dimension = [](Highs & highs, unsigned k, NT val) {
+            HighsInt id = k;
+            double coeff = 1.0;
+            highs.addRow((double)val, (double)val, 1, &id, &coeff);
+            highs.changeColBounds(k, -kHighsInf, kHighsInf);
+        };
+
+        unsigned d = P.getDimension();
+
+        Highs highs;
+        highs.setOptionValue("output_flag", false);
+        highs.setOptionValue("solver", "ipx");
+        highs.setOptionValue("run_crossover", "on");
+        highs.setOptionValue("presolve", "off");
+        build_lp_model(P, highs);
+
+        // Verifies the LP is not empty
+        highs.run();
+        if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+            Result<Point> result;
+            result.success = false;
+            result.P = P;
+            return result;
+        }
+        bool have_carry_basis = true;
+        HighsBasis carry_basis = highs.getBasis();  // Grabs the ipm basis
+
+        highs.setOptionValue("solver", "simplex");
+
+        bool simplified = false;
+        while (!simplified) {
+            simplified = true;
+            for (unsigned k = 0; k < d; ++k) {
+                double bl = highs.getLp().col_lower_[k];
+                double bu = highs.getLp().col_upper_[k];
+
+                if (is_free(bl, bu)) continue;     // Skips removed constraints or equalities
+
+                highs.changeColCost(k, 1.0);
+
+                // LP1: max with current bounds
+                highs.changeObjectiveSense(ObjSense::kMaximize);
+                highs.setOptionValue("simplex_strategy", 4);
+                if (have_carry_basis) highs.setBasis(carry_basis);
+                highs.run();
+                HighsBasis basis_lp1 = highs.getBasis();
+                NT max_val = (NT)highs.getObjectiveValue();
+
+                // LP2: max with relaxed bound
+                // Skipped if there is no upper bound
+                bool upper_redundant = false;
+                if (!std::isinf(bu)) {
+                    highs.changeColBounds(k, bl, bu+1.0);
+                    highs.setOptionValue("simplex_strategy", 1);
+                    highs.setBasis(basis_lp1);
+                    highs.run();
+                    NT max_val_relaxed = (NT)highs.getObjectiveValue();
+                    highs.changeColBounds(k, bl, bu);
+                    upper_redundant = std::abs(max_val_relaxed-max_val) < config.facet_tolerance;
+                }
+
+                // LP3: min with current bounds
+                highs.changeObjectiveSense(ObjSense::kMinimize);
+                highs.setOptionValue("simplex_strategy", 4);
+                highs.setBasis(basis_lp1);
+                highs.run();
+                HighsBasis basis_lp3 = highs.getBasis();
+                NT min_val = (NT)highs.getObjectiveValue();
+
+                // LP4: min with relaxed bound
+                // Skipped if there is no lower bound
+                bool lower_redundant = false;
+                if (!std::isinf(bl)) {
+                    highs.changeColBounds(k, bl-1.0, bu);
+                    highs.setOptionValue("simplex_strategy", 1);
+                    highs.setBasis(basis_lp3);
+                    highs.run();
+                    NT min_val_relaxed = (NT)highs.getObjectiveValue();
+                    highs.changeColBounds(k, bl, bu);
+                    lower_redundant = std::abs(min_val_relaxed-min_val) < config.facet_tolerance;
+                    
+                    carry_basis = highs.getBasis(); // use lp4 basis
+                    have_carry_basis = true;
+                } else {                            // Use lp3 basis instead
+                    carry_basis = basis_lp3;
+                    have_carry_basis = true;
+                }
+
+                highs.changeColCost(k, 0.0);
+
+                bool tight = std::abs(max_val - min_val) < config.dim_tolerance;
+
+                // Case1: Fix dimensions
+                if (config.fix_dimensions && tight) {
+                    NT mid = (max_val+min_val)/NT(2);
+                    fix_dimension(highs, k, mid);
+                    have_carry_basis = false;
+                    simplified = false;
+                    continue;
+                }
+
+                // Case2: Relax bounds
+                if (upper_redundant && !std::isinf(bu)) {
+                    highs.changeColBounds(k, bl, kHighsInf);
+                    bu = highs.getLp().col_upper_[k];
+                    simplified = false;
+                } 
+                if (lower_redundant && !std::isinf(bl)) {
+                    highs.changeColBounds(k, -kHighsInf, bu);
+                    simplified = false;
+                }
+            }
+
+        }
+
+
+        Result<Point> result;
+        MetabolicPolytope<Point> Pnew;
+        build_simplified_polytope(highs, Pnew);
+        result.dims_fixed = Pnew.getNumEqualities()-P.getNumEqualities();
+        result.bounds_relaxed = P.getNumFiniteBounds()-Pnew.getNumFiniteBounds();
+        result.P = Pnew;
+
+        return result;
+    }
 }
 #endif

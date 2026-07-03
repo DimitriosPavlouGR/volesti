@@ -12,7 +12,7 @@
 #include "cartesian_geom/cartesian_kernel.h"
 #include "convex_bodies/metabolic_polytope.h"
 #include "io/bigg_parser.hpp"
-#include "simplification/warm_start.hpp"
+#include "simplification/simplification.hpp"
 #include <iostream>
 #include <chrono>
 #include <iomanip>

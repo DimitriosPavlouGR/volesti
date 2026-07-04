@@ -10,9 +10,8 @@
 
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "convex_bodies/metabolic_polytope.h"
 #include "io/bigg_parser.hpp"
-#include "simplification/simplification.hpp"
+#include "preprocess/metabolic/metabolic_simplification.hpp"
 #include <iostream>
 #include <chrono>
 #include <iomanip>

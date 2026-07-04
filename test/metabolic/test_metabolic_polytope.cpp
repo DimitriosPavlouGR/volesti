@@ -11,7 +11,6 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "convex_bodies/metabolic_polytope.h"
 #include "io/bigg_parser.hpp"
 
 typedef double NT;

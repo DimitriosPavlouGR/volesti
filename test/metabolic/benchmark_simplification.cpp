@@ -12,6 +12,7 @@
 #include "cartesian_geom/cartesian_kernel.h"
 #include "io/bigg_parser.hpp"
 #include "preprocess/metabolic/metabolic_simplification.hpp"
+#include "preprocess/metabolic/clarkson.hpp"
 #include <iostream>
 #include <chrono>
 #include <iomanip>
@@ -29,8 +30,8 @@ void benchmark(std::string const& model, bool dimension_fixing) {
     Polytope P = parse_from_json<Point>(model);
 
     simplification::Config config;
-    config.fix_dimensions = dimension_fixing;
-
+    config.verbose = false;
+    config.fix_dimensions = true;
     auto start = std::chrono::high_resolution_clock::now();
     auto result = simplification::simplify(P, config);
     auto end = std::chrono::high_resolution_clock::now();
@@ -51,7 +52,7 @@ void benchmark(std::string const& model, bool dimension_fixing) {
 int main() {
     for (auto const& file : std::filesystem::directory_iterator(BIGG_DIR)) {
         if (file.path().extension() != ".json") continue;
-        benchmark(file.path().string(), false); // without dimension fixing
+        //benchmark(file.path().string(), false); // without dimension fixing
         benchmark(file.path().string(), true);  // with dimension fixing
     }
 

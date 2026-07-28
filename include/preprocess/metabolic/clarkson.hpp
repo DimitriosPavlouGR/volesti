@@ -24,9 +24,9 @@
 #include "Highs.h"
 
 namespace clarkson {
-    // Configuration parameters controlling the simplification process.
+    // Configuration parameters controlling the simplification process
     struct Config {
-        // Tolerance for marking a bound as redundant. A bound is relaxed if
+        // Tolerance for marking a bound as redundant, a bound is relaxed if
         // moving it does not change the optimum by more than this quantity
         double facet_tolerance = 1e-7;
 
@@ -34,7 +34,7 @@ namespace clarkson {
         // fixed when its max and min differ less than this quantity
         double dim_tolerance = 1e-7;
 
-        // The error tolerance for the interior point.
+        // The error tolerance for the interior point
         double interior_tolerance = 1e-6;
         
         // The error tolerance for the ray shooting stage of clarkson
@@ -43,8 +43,11 @@ namespace clarkson {
         // The gap by which the bound is relaxed in clarkson's lp test
         double relaxation_gap = 1.0;
 
-        // The bound on the number of failed iteration's in clarkson.
+        // The bound on the number of failed iteration's in clarkson
         unsigned failed_iter_count = 50;
+        
+        // The seed used by clarkson to select inequalities
+        unsigned clarkson_seed = 0;
 
         // If true, it prints diagnostic information about the simplification
         // process
@@ -56,23 +59,23 @@ namespace clarkson {
     // @tparam Point the point type of the polytope
     template <typename Point>
     struct Result {
-        // The simplified polytope.
+        // The simplified polytope
         MetabolicPolytope<Point> P;
 
-        // Number of finite bounds relaxed to +-infinity.
+        // Number of finite bounds relaxed to +-infinity
         unsigned bounds_relaxed = 0;
 
         // Number of dimensions fixed, i.e. tight box constraints converted
         // to equalities.
         unsigned dims_fixed = 0;      
 
-        // Tracks if simplification was successful.
+        // Tracks if simplification was successful
         bool success = true;
     };
 
     // A single side of the box bound, treated as a single row of the equivalent inequality
     // system A x <= b. An upper bound is of the form x_k <= b_u(k) and a lower bound is of
-    // the form b_l(k) <= x_k.
+    // the form b_l(k) <= x_k
     struct Ineq {
         // The index of the variable.
         unsigned k;
@@ -240,11 +243,17 @@ namespace clarkson {
         );
     }
 
+    // Converts every variable that the inequalities and bounds pin to
+    // a single value, into an equality.
+    //
+    // @tparam Point the point type of the polytope
+    // @param highs the model, already built from P
+    // @param config the simplification configuration
+    // @return the polytope with the degenerate dimensions moved into A_eq
     template<typename Point>
     MetabolicPolytope<Point> fix_dimensions(Highs & highs,
                                             MetabolicPolytope<Point> const& P,
-                                            Config const& config
-                                        ) 
+                                            Config const& config) 
     {   
         typedef typename MetabolicPolytope<Point>::MT MT;
         typedef typename MetabolicPolytope<Point>::VT VT;
@@ -377,11 +386,12 @@ namespace clarkson {
     // @tparam ZT the vector type of z
     // @param config the simplification configuration
     // @param z set to the interior point on success
-    // @return false if the LP
+    // @param success set to true if an interior point was found
     template<typename Point, typename ZT>
-    bool find_interior_point(MetabolicPolytope<Point> const& P,
+    void find_interior_point(MetabolicPolytope<Point> const& P,
                              Config const& config,
-                             ZT& z)
+                             ZT& z,
+                             bool & success)
     {
         typedef typename MetabolicPolytope<Point>::MT MT;
         typedef typename MetabolicPolytope<Point>::VT VT;
@@ -433,7 +443,8 @@ namespace clarkson {
                           << std::endl;
             }
 
-            return false;
+            success = false;
+            return;
         }
 
         if (highs.getObjectiveValue() < config.facet_tolerance) {
@@ -441,7 +452,8 @@ namespace clarkson {
                 std::cerr << "clarkson: slack " << highs.getObjectiveValue()
                           << " not positive after dimension fixing" << std::endl; 
             }
-            return false;
+            success = false;
+            return;
         }
 
         if (config.verbose) {
@@ -454,7 +466,8 @@ namespace clarkson {
         z.resize(d);
         for (unsigned j = 0; j < d; ++j)
             z(j) = (typename ZT::Scalar)sol[j];
-        return true;
+        
+        success = true;
     }
 
     // Shoots the ray z+t*r, t >= 0, and returns the first box bound it crosses.
@@ -660,13 +673,15 @@ namespace clarkson {
 
         std::vector<Ineq> I;
 
-        std::mt19937 rng(1);
-
+        std::mt19937 rng(config.clarkson_seed);
         std::vector<unsigned> fail_count(d, 0);
+
         while (!J.empty()) {
+            // Picks constraints at random to make progress when LPs fail
             std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
             auto it = J.begin();
             std::advance(it, pick(rng));
+
             Ineq k_ineq = *it;
 
             bool success = false;
@@ -739,7 +754,9 @@ namespace clarkson {
 
         // Looks for an interior point of P, such a point is essential for clarkson
         VT z;
-        if (!find_interior_point(res.P, config, z)) {
+        bool success;
+        find_interior_point(res.P, config, z, success);
+        if (!success) {
             res.success = false;
             return res;
         }

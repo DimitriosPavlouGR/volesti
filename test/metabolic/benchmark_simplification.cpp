@@ -29,11 +29,11 @@ typedef typename Polytope::VT VT;
 void benchmark(std::string const& model, bool dimension_fixing) {
     Polytope P = parse_from_json<Point>(model);
 
-    simplification::Config config;
+    clarkson::Config config;
     config.verbose = false;
-    config.fix_dimensions = true;
+    
     auto start = std::chrono::high_resolution_clock::now();
-    auto result = simplification::simplify(P, config);
+    auto result = clarkson::simplify(P, config);
     auto end = std::chrono::high_resolution_clock::now();
     double elapsed = std::chrono::duration<double>(end-start).count();
 

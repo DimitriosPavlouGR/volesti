@@ -89,17 +89,35 @@ namespace clarkson {
         }
     };
 
+    // Evaluates the left hand side of the constraint a x <= b. Trivially
+    // returns x_k or -x_k depending on the side of the inequality.
+    // @param VT the vector type of x
+    // @param a the inequality
+    // @param the point to evaluate at
+    // @return the inner dot product <a,x>
     template <typename VT>
-    inline double get_row_value(Ineq const& c, VT const& x) {
-        double xk = (double)x(c.k);
-        return c.is_upper ? xk : -xk;
+    inline double get_row_value(Ineq const& a, VT const& x) {
+        double xk = (double)x(a.k);
+        return a.is_upper ? xk : -xk;
     }
 
+    // Returns the right hand side of the box bound c written
+    // as a row a x <= b. Notice that the lower bound b_l(k) <= x_k becomes -x_k
+    // <= -b_l(k).
+    // @tparam VT the vector type of the bounds
+    // @param a the inequality
+    // @param b the bound vector
+    // @return the right hand side of the row
     template <typename VT>
-    inline double row_rhs(Ineq const& c, VT const& b_l, VT const& b_u) {
-        return c.is_upper ? (double)b_u(c.k) : -(double)b_l(c.k);
+    inline double get_row_rhs(Ineq const& a, VT const& b) {
+        return a.is_upper ? (double)b(a.k) : -(double)b(a.k);
     }
 
+    // Applies one bound of P to the highs model.
+    // @tparam Point the point type of the polytope
+    // @param highs the model
+    // @param P the polytope
+    // @param ineq the inequality to apply
     template <typename Point>
     void enforce_ineq(Highs & highs,
                       MetabolicPolytope<Point> const& P,
@@ -109,9 +127,11 @@ namespace clarkson {
         const VT& b_l = P.getLowerBounds();
         const VT& b_u = P.getUpperBounds();
 
+        // Stores the old lp state
         double lo = highs.getLp().col_lower_[ineq.k];
         double hi = highs.getLp().col_upper_[ineq.k];
 
+        // Adds only a single side inequality
         if (ineq.is_upper) {
             hi = std::isinf((double)b_u(ineq.k)) ? kHighsInf : (double)b_u(ineq.k);
         } else {
@@ -127,160 +147,6 @@ namespace clarkson {
         highs.setOptionValue("solver", "simplex");
         highs.setOptionValue("presolve", "off");
         highs.setOptionValue("simplex_strategy", 4);
-    }
-
-    // Tests whether the side ineq is redundant given the essential set I. The model
-    // already carries I, so only the tested constraint is temporarily applied.
-    //
-    // The tested bound is relaxed by `config.relaxation` rather than removed, and
-    // if the derived solution x* is feasible for the original LP, then the constraint
-    // is marked as redundant.
-    // @tparam Point the point type of the metabolic polytope.
-    // @param highs the model (with `I` applied) 
-    // @param P the polytope
-    // @param ineq the constraint to be tested
-    // @param config the simplification configuration
-    // @param success a variable tracking if the LP failed
-    // @return whether ineq is redundant, and the LP optimum
-    template <typename Point>
-    std::pair<bool, typename MetabolicPolytope<Point>::VT> test_redundancy(Highs & highs,
-                                                                           MetabolicPolytope<Point> const& P,
-                                                                           Ineq const& ineq,
-                                                                           Config const& config,
-                                                                           bool & success
-                                                                           )
-    {   
-        typedef typename MetabolicPolytope<Point>::VT VT;
-        const VT& b_l = P.getLowerBounds();
-        const VT& b_u = P.getUpperBounds();
-        unsigned d = P.getDimension();
-
-        double old_u = highs.getLp().col_upper_[ineq.k];
-        double old_l = highs.getLp().col_lower_[ineq.k];
-        double u = ineq.is_upper ? (double)b_u(ineq.k)+config.relaxation_gap : old_u;
-        double l = !ineq.is_upper ? (double)b_l(ineq.k)-config.relaxation_gap : old_l;
-
-        highs.changeColBounds((HighsInt)ineq.k, l, u);
-        highs.changeColCost((HighsInt)ineq.k, 1.0);
-        highs.changeObjectiveSense(ineq.is_upper ? ObjSense::kMaximize : ObjSense::kMinimize);
-        highs.run();
-
-        HighsModelStatus st = highs.getModelStatus();
-
-        if (st != HighsModelStatus::kOptimal) {
-            if (config.verbose) {
-                std::cerr << "clarkson: LP status " << (int)st
-                          << " on coordinate " << ineq.k
-                          << (ineq.is_upper ? " upper" : " lower") << std::endl;
-            }
-            highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
-            highs.changeColCost((HighsInt)ineq.k, 0.0);
-            success = false;
-            return {false, VT(0)};
-        }
-
-        success = true;
-
-        const auto& sol = highs.getSolution().col_value;
-        VT x_star(d);
-        for (unsigned j = 0; j < d; ++j)
-            x_star(j) = (typename VT::Scalar)sol[j];
-
-        double rhs = row_rhs(ineq, b_l, b_u);
-        double opt = get_row_value(ineq, x_star);
-
-        highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
-        highs.changeColCost((HighsInt)ineq.k, 0.0);
-        return {opt <= rhs+config.facet_tolerance, x_star};
-
-    }
-
-    // Clarkson decides the fate of a single constraint, returning
-    // @tparam Point the point type of the metabolic polytope
-    // @tparam ZT the vector type of z
-    // @param highs the model (with `I` applied) 
-    // @param P the polytope
-    // @param z a point in the interior of the polytope
-    // @param k_ineq the candidate constraint
-    // @param config the clarkson configuration
-    // @param success false if the LP or the ray shot failed
-    template <typename Point, typename ZT>
-    std::pair<bool, Ineq> clarkson(Highs & highs,
-                        MetabolicPolytope<Point> const& P,
-                        ZT const& z,
-                        Ineq const& k_ineq,
-                        Config const& config,
-                        bool & success
-                        ) 
-    {
-        typedef typename MetabolicPolytope<Point>::VT VT;
-        unsigned d = P.getDimension();
-
-        auto [is_redundant, x_star] = test_redundancy(
-            highs, P, k_ineq, config, success
-        );
-
-        // Handle the case were the Lp solver failed
-        if (!success) {
-            return {false, Ineq{}};
-        }
-
-        if (!is_redundant) {
-            VT r = x_star-(VT)z;
-            Ineq hit = ray_shoot(P, z, r, config, success);
-            if (!success) return {false, Ineq{}};
-            return {false, hit};
-        } else {
-            return {true, k_ineq};
-        }
-    }
-
-
-    template <typename Point, typename ZT>
-    Ineq ray_shoot(MetabolicPolytope<Point> const& P,
-                                    ZT const& z,
-                                    ZT const& r,
-                                    Config const& config,
-                                    bool & success
-                                    )
-    {
-        typedef typename MetabolicPolytope<Point>::VT VT;
-        const VT& b_l = P.getLowerBounds();
-        const VT& b_u = P.getUpperBounds();
-        unsigned d = P.getDimension();
-
-        double best = std::numeric_limits<double>::infinity();
-
-        Ineq hit;
-        bool found = false;
-
-        for (unsigned k = 0; k < d; ++k) {
-            double rk = (double)r(k);
-            if (std::abs(rk) < config.ray_tolerance) continue;
-
-            for (unsigned side = 0; side < 2; ++side) {
-                Ineq c{k, side==1};
-
-                double ar = c.is_upper ? rk : -rk;
-                if (ar <= config.ray_tolerance) continue;
-
-                double rhs = row_rhs(c, b_l, b_u);
-                if (std::isinf(rhs)) continue;
-
-                double az = get_row_value(c, z);
-                double alpha = (rhs-az)/ar;
-                if (alpha < 0.0) continue;
-
-                if (!found || alpha < best) {
-                    best = alpha;
-                    hit = c;
-                    found = true;
-                }
-            }
-        }
-        
-        success = found;
-        return hit;
     }
 
     // Builds the LP that describes the feasible region of the Polytope.
@@ -338,7 +204,6 @@ namespace clarkson {
         unsigned d = (unsigned)highs.getNumCol();
 
         // Grabs the lower/upper bounds of the reaction variables
-        
         VT b_l_new(d), b_u_new(d);
         for (unsigned j = 0; j < d; ++j) {
             b_l_new(j) = lp.col_lower_[j] <=  -kHighsInf ? -INF : (NT)lp.col_lower_[j];
@@ -346,7 +211,6 @@ namespace clarkson {
         }
 
         // Builds A_eq and b_eq
-
         lp.a_matrix_.ensureRowwise();
         const auto& start = lp.a_matrix_.start_;
         const auto& indices = lp.a_matrix_.index_;
@@ -504,6 +368,16 @@ namespace clarkson {
         return tP;
     }
     
+    // Finds a point in the interior of P by maximizing a uniform slack variable against all bounds.
+    //
+    // The LP solved is the following:
+    //
+    // max y s.t. A_eq x = b_eq, b_l+y <= x <= b_u-y, 0 <= y <= 1
+    // @tparam Point the point of the polytope
+    // @tparam ZT the vector type of z
+    // @param config the simplification configuration
+    // @param z set to the interior point on success
+    // @return false if the LP
     template<typename Point, typename ZT>
     bool find_interior_point(MetabolicPolytope<Point> const& P,
                              Config const& config,
@@ -519,9 +393,7 @@ namespace clarkson {
         unsigned d = P.getDimension();
 
         Highs highs;
-        highs.setOptionValue("output_flag", false);
-        highs.setOptionValue("solver", "simplex");
-        highs.setOptionValue("simplex_strategy", 4);
+        configure_highs(highs);
 
         for (unsigned j = 0; j < d; ++j) {
             highs.addVar(-kHighsInf, kHighsInf);
@@ -585,6 +457,179 @@ namespace clarkson {
         return true;
     }
 
+    // Shoots the ray z+t*r, t >= 0, and returns the first box bound it crosses.
+    // @tparam Point the point type of the polytope
+    // @tparam ZT the vector type of z
+    // @param P the polytope
+    // @param z the ray origin, a interior point of P
+    // @param r the ray direction
+    // @param config the simplification configuration
+    // @param success false if the ray escapes without hiting a facet
+    // @return the facet hit first, meaningful only when success is true
+    template <typename Point, typename ZT>
+    Ineq ray_shoot(MetabolicPolytope<Point> const& P,
+                   ZT const& z,
+                   ZT const& r,
+                   Config const& config,
+                   bool & success)
+    {
+        typedef typename MetabolicPolytope<Point>::VT VT;
+        const VT& b_l = P.getLowerBounds();
+        const VT& b_u = P.getUpperBounds();
+        unsigned d = P.getDimension();
+
+        double best = std::numeric_limits<double>::infinity();
+
+        Ineq hit;
+        bool found = false;
+
+        // Goes over all variables
+        for (unsigned k = 0; k < d; ++k) {
+            double rk = (double)r(k);
+            if (std::abs(rk) < config.ray_tolerance) continue;
+
+            // Goes over both inequalities
+            for (unsigned side = 0; side < 2; ++side) {
+                Ineq c{k, side==1};
+
+                double tr = c.is_upper ? rk : -rk;
+                if (tr <= config.ray_tolerance) continue;
+
+                double rhs = get_row_rhs(c, c.is_upper ? b_u : b_l);
+                if (std::isinf(rhs)) continue;
+
+                double tz = get_row_value(c, z);
+                double t = (rhs-tz)/tr;
+                if (t < 0.0) continue;
+
+                if (!found || t < best) {
+                    best = t;
+                    hit = c;
+                    found = true;
+                }
+            }
+        }
+        
+        success = found;
+        return hit;
+    }
+
+    // Tests whether the side ineq is redundant given the essential set I. The model
+    // already carries I, so only the tested constraint is temporarily applied.
+    //
+    // The tested bound is relaxed by `config.relaxation` rather than removed, and
+    // if the derived solution x* is feasible for the original LP, then the constraint
+    // is marked as redundant.
+    // @tparam Point the point type of the metabolic polytope.
+    // @param highs the model (with `I` applied) 
+    // @param P the polytope
+    // @param ineq the constraint to be tested
+    // @param config the simplification configuration
+    // @param success a variable tracking if the LP failed
+    // @return whether ineq is redundant, and the LP optimum
+    template <typename Point>
+    std::pair<bool, typename MetabolicPolytope<Point>::VT> test_redundancy(Highs & highs,
+                                                                           MetabolicPolytope<Point> const& P,
+                                                                           Ineq const& ineq,
+                                                                           Config const& config,
+                                                                           bool & success)
+    {   
+        typedef typename MetabolicPolytope<Point>::VT VT;
+        const VT& b_l = P.getLowerBounds();
+        const VT& b_u = P.getUpperBounds();
+        unsigned d = P.getDimension();
+
+        double old_u = highs.getLp().col_upper_[ineq.k];
+        double old_l = highs.getLp().col_lower_[ineq.k];
+        double u = ineq.is_upper ? (double)b_u(ineq.k)+config.relaxation_gap : old_u;
+        double l = !ineq.is_upper ? (double)b_l(ineq.k)-config.relaxation_gap : old_l;
+
+        highs.changeColBounds((HighsInt)ineq.k, l, u);
+        highs.changeColCost((HighsInt)ineq.k, 1.0);
+        highs.changeObjectiveSense(ineq.is_upper ? ObjSense::kMaximize : ObjSense::kMinimize);
+        highs.run();
+
+        HighsModelStatus st = highs.getModelStatus();
+
+        if (st != HighsModelStatus::kOptimal) {
+            if (config.verbose) {
+                std::cerr << "clarkson: LP status " << (int)st
+                          << " on coordinate " << ineq.k
+                          << (ineq.is_upper ? " upper" : " lower") << std::endl;
+            }
+            highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
+            highs.changeColCost((HighsInt)ineq.k, 0.0);
+            success = false;
+            return {false, VT(0)};
+        }
+
+        success = true;
+
+        const auto& sol = highs.getSolution().col_value;
+        VT x_star(d);
+        for (unsigned j = 0; j < d; ++j)
+            x_star(j) = (typename VT::Scalar)sol[j];
+
+        double rhs = get_row_rhs(ineq, ineq.is_upper ? b_u : b_l);
+        double opt = get_row_value(ineq, x_star);
+
+        highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
+        highs.changeColCost((HighsInt)ineq.k, 0.0);
+        return {opt <= rhs+config.facet_tolerance, x_star};
+
+    }
+
+    // Clarkson decides the fate of a single constraint, returning
+    // @tparam Point the point type of the metabolic polytope
+    // @tparam ZT the vector type of z
+    // @param highs the model (with `I` applied) 
+    // @param P the polytope
+    // @param z a point in the interior of the polytope
+    // @param k_ineq the candidate constraint
+    // @param config the clarkson configuration
+    // @param success false if the LP or the ray shot failed
+    template <typename Point, typename ZT>
+    std::pair<bool, Ineq> clarkson(Highs & highs,
+                        MetabolicPolytope<Point> const& P,
+                        ZT const& z,
+                        Ineq const& k_ineq,
+                        Config const& config,
+                        bool & success) 
+    {
+        typedef typename MetabolicPolytope<Point>::VT VT;
+        unsigned d = P.getDimension();
+
+        auto [is_redundant, x_star] = test_redundancy(
+            highs, P, k_ineq, config, success
+        );
+
+        // Handle the case were the Lp solver failed
+        if (!success) {
+            return {false, Ineq{}};
+        }
+
+        if (!is_redundant) {
+            VT r = x_star-(VT)z;
+            Ineq hit = ray_shoot(P, z, r, config, success);
+            if (!success) return {false, Ineq{}};
+            return {false, hit};
+        } else {
+            return {true, k_ineq};
+        }
+    }
+
+    // Removes redundant inequalities from the representation using Clarkson's algorithm.
+    //
+    // The model starts with every inequality relaxed and gains them back one at a time
+    // as they are proved essential, so every LP is solved against the essential set I 
+    // found so far rather than the full set of inequalities, keeping the LP sizes at a minimum.
+    // @tparam Point the point tyoe if the polytope
+    // @tparam ZT the vector type of z
+    // @param highs the model, built from P
+    // @param P the polytope
+    // @param z an interior point of P
+    // @param config the simplification configuration
+    // @return the polytope with redundant bounds relaxed
     template<typename Point, typename ZT>
     MetabolicPolytope<Point> redundancy_removal_clarkson(Highs & highs,
                                                          MetabolicPolytope<Point> const& P,
@@ -602,9 +647,11 @@ namespace clarkson {
         const VT& b_l = P.getLowerBounds();
         const VT& b_u = P.getUpperBounds();
 
+        // Starts with all inequalities relaxed
         for (unsigned j = 0; j < d; ++j)
             highs.changeColBounds((HighsInt)j, -kHighsInf, kHighsInf);
 
+        // Holds the inequalities with unknown redundancy status
         std::set<Ineq> J;
         for (unsigned k = 0; k < d; ++k) {
             if (!std::isinf((double)b_l(k))) J.insert(Ineq{k, false});
@@ -612,6 +659,7 @@ namespace clarkson {
         }
 
         std::vector<Ineq> I;
+
         std::mt19937 rng(1);
 
         std::vector<unsigned> fail_count(d, 0);
@@ -664,6 +712,11 @@ namespace clarkson {
         return MetabolicPolytope<Point>(d, A_eq, b_l_new, b_u_new, b_eq);
     }
     
+    // Simplifies the polytope by fixing the degenerate dimensions and running
+    // Clarkson's algorithm, which removes redundant constraints.
+    // @tparam Point the point type of the polytope
+    // @param config the simplification configuration
+    // @return the simplified polytope, the counts, and whether it succeeded
     template<typename Point>
     Result<Point> simplify(MetabolicPolytope<Point> const& P,
                            Config const& config = Config{}) 
@@ -671,10 +724,11 @@ namespace clarkson {
         typedef typename MetabolicPolytope<Point>::VT VT;
 
         Highs highs;
+        Result<Point> res;
         configure_highs(highs);
         build_lp_model(P, highs);
 
-        Result<Point> res;
+        // Removes degenerate facets
         res.P = fix_dimensions(highs, P, config);
         res.dims_fixed = res.P.getNumEqualities()-P.getNumEqualities();
 
@@ -683,12 +737,14 @@ namespace clarkson {
                       << std::endl;
         }
 
+        // Looks for an interior point of P, such a point is essential for clarkson
         VT z;
         if (!find_interior_point(res.P, config, z)) {
             res.success = false;
             return res;
         }
         
+        // Runs clarkson's algorithm
         res.P = redundancy_removal_clarkson(highs, res.P, z, config);
         res.bounds_relaxed = P.getNumFiniteBounds()-res.P.getNumFiniteBounds();
         res.success = true;

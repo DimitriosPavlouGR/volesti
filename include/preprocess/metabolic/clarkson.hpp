@@ -35,10 +35,10 @@ namespace clarkson {
         double dim_tolerance = 1e-7;
 
         // The error tolerance for the interior point
-        double interior_tolerance = 1e-6;
+        double interior_tolerance = 1e-9;
         
         // The error tolerance for the ray shooting stage of clarkson
-        double ray_tolerance = 1e-7;
+        double ray_tolerance = 1e-9;
 
         // The gap by which the bound is relaxed in clarkson's lp test
         double relaxation_gap = 1.0;
@@ -437,21 +437,21 @@ namespace clarkson {
         highs.run();
 
         if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
-            if (config.verbose) {
+            //if (config.verbose) {
                 std::cerr << "clarkson: interior LP status "
                           << (int)highs.getModelStatus() 
                           << std::endl;
-            }
+            //}
 
             success = false;
             return;
         }
 
-        if (highs.getObjectiveValue() < config.facet_tolerance) {
-            if (config.verbose) {
+        if (highs.getObjectiveValue() < config.interior_tolerance) {
+            //if (config.verbose) {
                 std::cerr << "clarkson: slack " << highs.getObjectiveValue()
-                          << " not positive after dimension fixing" << std::endl; 
-            }
+                          << " not significant after dimension fixing" << std::endl; 
+            //}
             success = false;
             return;
         }
@@ -470,6 +470,7 @@ namespace clarkson {
         success = true;
     }
 
+    
     // Shoots the ray z+t*r, t >= 0, and returns the first box bound it crosses.
     // @tparam Point the point type of the polytope
     // @tparam ZT the vector type of z
@@ -567,7 +568,7 @@ namespace clarkson {
         if (st != HighsModelStatus::kOptimal) {
             if (config.verbose) {
                 std::cerr << "clarkson: LP status " << (int)st
-                          << " on coordinate " << ineq.k
+                      << " on coordinate " << ineq.k
                           << (ineq.is_upper ? " upper" : " lower") << std::endl;
             }
             highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
@@ -706,9 +707,19 @@ namespace clarkson {
             if (is_redundant) {
                 J.erase(k_ineq);
             } else {
-                J.erase(ineq);
-                I.push_back(ineq);
-                enforce_ineq(highs, P, ineq);
+                if (!J.erase(ineq)) {
+                    if (config.verbose) {
+                        std::cerr << "clarkson: hit already essential inequality"
+                                << k_ineq.k << (k_ineq.is_upper ? " upper" : " lower")
+                                << std::endl;
+                    }
+                    I.push_back(k_ineq);
+                    enforce_ineq(highs, P, k_ineq);
+                    J.erase(k_ineq);
+                } else {
+                    I.push_back(ineq);
+                    enforce_ineq(highs, P, ineq);
+                }
             }
         }
 

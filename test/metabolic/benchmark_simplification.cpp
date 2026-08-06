@@ -31,7 +31,7 @@ void benchmark(std::string const& model, bool dimension_fixing) {
 
     clarkson::Config config;
     config.verbose = false;
-    
+
     auto start = std::chrono::high_resolution_clock::now();
     auto result = clarkson::simplify(P, config);
     auto end = std::chrono::high_resolution_clock::now();

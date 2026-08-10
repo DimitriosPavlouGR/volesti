@@ -8,16 +8,37 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
-#ifndef METABOLIC_SIMPLIFICATION_HPP
-#define METABOLIC_SIMPLIFICATION_HPP
+#ifndef METABOLIC_EXHAUSTIVE_SIMPLIFICATION_HPP
+#define METABOLIC_EXHAUSTIVE_SIMPLIFICATION_HPP
 
+#include <iostream>
 #include <vector>
 #include <cmath>
 #include <limits>
 #include "convex_bodies/metabolic_polytope.hpp"
 #include "Highs.h"
 
-namespace simplification {
+namespace exhaustive_simplification {
+    // How much diagnostic information to print during simplification.
+    enum class VerbosityLevel {
+        Silent = 0, // Prints nothing
+        Summary,    // Prints a summary at the end of simplification
+        Detailed    // Prints a summary at the end of simplification and
+                    // information about each LP solved.
+    };
+
+    // Writes diagnostic information to the given stream if it is not null.
+    // @tparam Args the types of the arguments to print
+    // @param log_stream the stream to write to, or nullptr
+    // @param args the arguments to print
+    template <typename... Args>
+    inline void log_diagnostics(std::ostream* log_stream, Args const&... args) {
+        if (log_stream) {
+            ((*log_stream << args), ...);
+            *log_stream << std::endl;
+        }
+    }
+
     // Configuration parameters controlling the simplification process.
     struct Config {
         // Tolerance for marking a bound as redundant. A bound is relaxed if
@@ -28,12 +49,24 @@ namespace simplification {
         // fixed when its max and min differ less than this quantity.
         double dim_tolerance = 1e-7;
 
-        // If true, it prints diagnostic information about the simplification
-        // process.
-        bool verbose = false;
-
         // If true, degenerate dimensions are fixed.
         bool fix_dimensions = false;
+
+        double primal_feasibility_tol = 1e-9;
+        double dual_feasibility_tol = 1e-8;
+
+        // How much information is printed during simplification.
+        VerbosityLevel verbosity = VerbosityLevel::Silent;
+
+        // Where the diagnostic information is printed. Defaults to std::cerr.
+        std::ostream* log_stream = &std::cerr;
+        
+        // Returns the stream where diagnostic information should be printed.
+        // @param level the level the message belongs to
+        // @return the stream, or nullptr
+        std::ostream* log_at(VerbosityLevel level) const {
+            return verbosity >= level ? log_stream : nullptr;
+        }
     };
 
     // Result of the simplification process, containing the simplified polytope and
@@ -50,6 +83,9 @@ namespace simplification {
         // Number of dimensions fixed, i.e. tight box constraints converted
         // to equalities.
         unsigned dims_fixed = 0;      
+
+        // Number of simplification passes performed
+        unsigned passes = 0;
 
         // Tracks if simplification was successful.
         bool success = true;
@@ -179,20 +215,35 @@ namespace simplification {
         highs.setOptionValue("output_flag", false);
         highs.setOptionValue("solver", "simplex");
         highs.setOptionValue("simplex_strategy", 4);
+        highs.setOptionValue("primal_feasibility_tolerance", config.primal_feasibility_tol);
+        highs.setOptionValue("dual_feasibility_tolerance", config.dual_feasibility_tol);
         build_lp_model(P, highs);
 
         // Verifies the LP is not empty
         highs.run();
         if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "exhaustive: initial LP failed with status ",
+                            (int)highs.getModelStatus());
+
             Result<Point> result;
             result.success = false;
             result.P = P;
             return result;
         }
         
+        log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                        "exhaustive: starting simplification on polytope with ",
+                        d, " reactions, ", 
+                        P.getNumEqualities(), " metabolites, and ",
+                        P.getNumFiniteBounds(), " finite bounds");
+
         bool simplified = false;
+
+        unsigned pass = 0;
         while (!simplified) {
             simplified = true;
+
             for (unsigned k = 0; k < d; ++k) {
                 double bl = highs.getLp().col_lower_[k];
                 double bu = highs.getLp().col_upper_[k];
@@ -201,9 +252,27 @@ namespace simplification {
 
                 highs.changeColCost(k, 1.0);
 
+                // Runs the LP and documents failures
+                auto run_lp = [&](char const* lp_type) {
+                    highs.run();
+                    if (highs.getModelStatus() == HighsModelStatus::kOptimal) 
+                        return true;
+
+                    log_diagnostics(config.log_at(VerbosityLevel::Detailed),
+                                "exhaustive: LP ", lp_type, 
+                                " failed on variable ", k,
+                                " with status ", (int)highs.getModelStatus());
+                    
+                    return false;
+                };
+
                 // LP1: max with current bounds
                 highs.changeObjectiveSense(ObjSense::kMaximize);
-                highs.run();
+                if (!run_lp("max")) {
+                    highs.changeColCost(k, 0.0);
+                    continue;
+                }
+
                 NT max_val = (NT)highs.getObjectiveValue();
 
                 // LP2: max with relaxed bound
@@ -211,15 +280,18 @@ namespace simplification {
                 bool upper_redundant = false;
                 if (!std::isinf(bu)) {
                     highs.changeColBounds(k, bl, bu+1.0);
-                    highs.run();
+                    bool lp_solved = run_lp("relaxed max");
                     NT max_val_relaxed = (NT)highs.getObjectiveValue();
                     highs.changeColBounds(k, bl, bu);
-                    upper_redundant = std::abs(max_val_relaxed-max_val) < config.facet_tolerance;
+                    upper_redundant = lp_solved && std::abs(max_val_relaxed-max_val) < config.facet_tolerance;
                 }
 
                 // LP3: min with current bounds
                 highs.changeObjectiveSense(ObjSense::kMinimize);
-                highs.run();
+                if (!run_lp("min")) {
+                    highs.changeColCost(k, 0.0);
+                    continue;
+                }
                 NT min_val = (NT)highs.getObjectiveValue();
 
                 // LP4: min with relaxed bound
@@ -227,10 +299,10 @@ namespace simplification {
                 bool lower_redundant = false;
                 if (!std::isinf(bl)) {
                     highs.changeColBounds(k, bl-1.0, bu);
-                    highs.run();
+                    bool lp_solved = run_lp("relaxed min");
                     NT min_val_relaxed = (NT)highs.getObjectiveValue();
                     highs.changeColBounds(k, bl, bu);
-                    lower_redundant = std::abs(min_val_relaxed-min_val) < config.facet_tolerance;
+                    lower_redundant = lp_solved && std::abs(min_val_relaxed-min_val) < config.facet_tolerance;
                 }
 
                 highs.changeColCost(k, 0.0);
@@ -256,7 +328,7 @@ namespace simplification {
                     simplified = false;
                 }
             }
-
+            ++pass;
         }
 
 
@@ -265,7 +337,14 @@ namespace simplification {
         build_simplified_polytope(highs, Pnew);
         result.dims_fixed = Pnew.getNumEqualities()-P.getNumEqualities();
         result.bounds_relaxed = P.getNumFiniteBounds()-Pnew.getNumFiniteBounds();
+        result.passes = pass;
         result.P = Pnew;
+
+        log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                        "exhaustive: simplification finished in ", pass,
+                        " passes, fixed ", result.dims_fixed,
+                        " dimensions, relaxed ", result.bounds_relaxed,
+                        " bounds");
 
         return result;
     }

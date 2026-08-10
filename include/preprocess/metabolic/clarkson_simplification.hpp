@@ -8,9 +8,11 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
-#ifndef METABOLIC_CLARKSON_HPP
-#define METABOLIC_CLARKSON_HPP
+#ifndef METABOLIC_CLARKSON_SIMPLIFICATION_HPP
+#define METABOLIC_CLARKSON_SIMPLIFICATION_HPP
 
+#include <iostream>
+#include <array>
 #include <vector>
 #include <set>
 #include <queue>
@@ -21,37 +23,61 @@
 #include <limits>
 #include <Eigen/Eigen>
 #include "convex_bodies/metabolic_polytope.hpp"
+#include "preprocess/metabolic/exhaustive_simplification.hpp"
 #include "Highs.h"
 
-namespace clarkson {
-    // Configuration parameters controlling the simplification process
+namespace clarkson_simplification {
+    // Reuses the verbosity level and logging function from exhaustive simplification.
+    using exhaustive_simplification::VerbosityLevel;
+    using exhaustive_simplification::log_diagnostics;
+
+    // Configuration parameters controlling the simplification process.
     struct Config {
         // Tolerance for marking a bound as redundant, a bound is relaxed if
-        // moving it does not change the optimum by more than this quantity
+        // moving it does not change the optimum by more than this quantity.
         double facet_tolerance = 1e-7;
 
         // Tolerance for marking a dimension as degenerate. A dimension is
-        // fixed when its max and min differ less than this quantity
+        // fixed when its max and min differ less than this quantity.
         double dim_tolerance = 1e-7;
 
-        // The error tolerance for the interior point
+        // The error tolerance for the interior point.
         double interior_tolerance = 1e-9;
         
-        // The error tolerance for the ray shooting stage of clarkson
+        // The error tolerance for the ray shooting stage of clarkson.
         double ray_tolerance = 1e-9;
 
-        // The gap by which the bound is relaxed in clarkson's lp test
+        // The gap by which the bound is relaxed in clarkson's lp test.
         double relaxation_gap = 1.0;
 
-        // The bound on the number of failed iteration's in clarkson
+        // The bound on the number of failed iteration's in clarkson.
         unsigned failed_iter_count = 50;
         
-        // The seed used by clarkson to select inequalities
+        // The seed used by clarkson to select inequalities.
         unsigned clarkson_seed = 0;
 
+        // If true, degenerate dimensions are fixed before the redundancy removal.
+        // Clarkson needs an interior point to work, which is difficult to compute
+        // for a polytope with degenerate dimensions, so having this turned off
+        // will usually send the run down the exhaustive fallback.
+        bool fix_dimensions = false;
+        
+        double primal_feasibility_tol = 1e-9;
+        double dual_feasibility_tol = 1e-8;
+
         // If true, it prints diagnostic information about the simplification
-        // process
-        bool verbose = false;
+        // process.
+        VerbosityLevel verbosity = VerbosityLevel::Silent;
+
+        // Where the diagnostic information is printed. Defaults to std::cerr.
+        std::ostream* log_stream = &std::cerr;
+        
+        // Returns the stream where diagnostic information should be printed.
+        // @param level the level the message belongs to
+        // @return the stream, or nullptr
+        std::ostream* log_at(VerbosityLevel level) const {
+            return verbosity >= level ? log_stream : nullptr;
+        }
     };
 
     // Result of the simplification process, containing the simplified polytope and
@@ -59,23 +85,23 @@ namespace clarkson {
     // @tparam Point the point type of the polytope
     template <typename Point>
     struct Result {
-        // The simplified polytope
+        // The simplified polytope.
         MetabolicPolytope<Point> P;
 
-        // Number of finite bounds relaxed to +-infinity
+        // Number of finite bounds relaxed to +-infinity.
         unsigned bounds_relaxed = 0;
 
         // Number of dimensions fixed, i.e. tight box constraints converted
         // to equalities.
         unsigned dims_fixed = 0;      
 
-        // Tracks if simplification was successful
+        // Tracks if simplification was successful.
         bool success = true;
     };
 
     // A single side of the box bound, treated as a single row of the equivalent inequality
     // system A x <= b. An upper bound is of the form x_k <= b_u(k) and a lower bound is of
-    // the form b_l(k) <= x_k
+    // the form b_l(k) <= x_k.
     struct Ineq {
         // The index of the variable.
         unsigned k;
@@ -130,11 +156,11 @@ namespace clarkson {
         const VT& b_l = P.getLowerBounds();
         const VT& b_u = P.getUpperBounds();
 
-        // Stores the old lp state
+        // Stores the old lp state.
         double lo = highs.getLp().col_lower_[ineq.k];
         double hi = highs.getLp().col_upper_[ineq.k];
 
-        // Adds only a single side inequality
+        // Adds only a single side inequality.
         if (ineq.is_upper) {
             hi = std::isinf((double)b_u(ineq.k)) ? kHighsInf : (double)b_u(ineq.k);
         } else {
@@ -145,11 +171,13 @@ namespace clarkson {
     
     // Applies the solver options shared by every lp in this file.
     // @param highs the model to configure
-    void configure_highs(Highs & highs) {
+    inline void configure_highs(Highs & highs, Config const & config) {
         highs.setOptionValue("output_flag", false);
         highs.setOptionValue("solver", "simplex");
         highs.setOptionValue("presolve", "off");
         highs.setOptionValue("simplex_strategy", 4);
+        highs.setOptionValue("primal_feasibility_tolerance", config.primal_feasibility_tol);
+        highs.setOptionValue("dual_feasibility_tolerance", config.dual_feasibility_tol);
     }
 
     // Builds the LP that describes the feasible region of the Polytope.
@@ -206,14 +234,14 @@ namespace clarkson {
         
         unsigned d = (unsigned)highs.getNumCol();
 
-        // Grabs the lower/upper bounds of the reaction variables
+        // Grabs the lower/upper bounds of the reaction variables.
         VT b_l_new(d), b_u_new(d);
         for (unsigned j = 0; j < d; ++j) {
             b_l_new(j) = lp.col_lower_[j] <=  -kHighsInf ? -INF : (NT)lp.col_lower_[j];
             b_u_new(j) = lp.col_upper_[j] >= kHighsInf ? INF : (NT)lp.col_upper_[j];
         }
 
-        // Builds A_eq and b_eq
+        // Builds A_eq and b_eq.
         lp.a_matrix_.ensureRowwise();
         const auto& start = lp.a_matrix_.start_;
         const auto& indices = lp.a_matrix_.index_;
@@ -313,10 +341,10 @@ namespace clarkson {
 
         highs.run();
         if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
-            if (config.verbose) {
-                std::cerr << "clarkson: dimension fixing failed with status "
-                          << (int)highs.getModelStatus() << std::endl;
-            }
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: dimension fixing failed with status ",
+                            (int)highs.getModelStatus());
+
             return P;
         }
         observe(highs.getSolution());
@@ -403,7 +431,7 @@ namespace clarkson {
         unsigned d = P.getDimension();
 
         Highs highs;
-        configure_highs(highs);
+        configure_highs(highs, config);
 
         for (unsigned j = 0; j < d; ++j) {
             highs.addVar(-kHighsInf, kHighsInf);
@@ -437,30 +465,26 @@ namespace clarkson {
         highs.run();
 
         if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
-            //if (config.verbose) {
-                std::cerr << "clarkson: interior LP status "
-                          << (int)highs.getModelStatus() 
-                          << std::endl;
-            //}
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: interior LP status ",
+                            (int)highs.getModelStatus());
 
             success = false;
             return;
         }
 
         if (highs.getObjectiveValue() < config.interior_tolerance) {
-            //if (config.verbose) {
-                std::cerr << "clarkson: slack " << highs.getObjectiveValue()
-                          << " not significant after dimension fixing" << std::endl; 
-            //}
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: slack ", highs.getObjectiveValue(),
+                            " not significant after dimension fixing");
+        
             success = false;
             return;
         }
 
-        if (config.verbose) {
-            std::cerr << "clarkson: interior LP optimal, slack objective = "
-                      << highs.getObjectiveValue()
-                      << std::endl;
-        }
+        log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                        "clarkson: interior LP optimal, slack objective = ",
+                        highs.getObjectiveValue());
 
         const auto& sol = highs.getSolution().col_value;
         z.resize(d);
@@ -497,12 +521,12 @@ namespace clarkson {
         Ineq hit;
         bool found = false;
 
-        // Goes over all variables
+        // Goes over all variables.
         for (unsigned k = 0; k < d; ++k) {
             double rk = (double)r(k);
             if (std::abs(rk) < config.ray_tolerance) continue;
 
-            // Goes over both inequalities
+            // Goes over both inequalities.
             for (unsigned side = 0; side < 2; ++side) {
                 Ineq c{k, side==1};
 
@@ -566,11 +590,11 @@ namespace clarkson {
         HighsModelStatus st = highs.getModelStatus();
 
         if (st != HighsModelStatus::kOptimal) {
-            if (config.verbose) {
-                std::cerr << "clarkson: LP status " << (int)st
-                      << " on coordinate " << ineq.k
-                          << (ineq.is_upper ? " upper" : " lower") << std::endl;
-            }
+            log_diagnostics(config.log_at(VerbosityLevel::Detailed),
+                            "clarkson: LP status ", (int)st,
+                            " on coordinate ", ineq.k,
+                            (ineq.is_upper ? " upper" : " lower"));
+
             highs.changeColBounds((HighsInt)ineq.k, old_l, old_u);
             highs.changeColCost((HighsInt)ineq.k, 0.0);
             success = false;
@@ -617,7 +641,7 @@ namespace clarkson {
             highs, P, k_ineq, config, success
         );
 
-        // Handle the case were the Lp solver failed
+        // Handle the case were the Lp solver failed.
         if (!success) {
             return {false, Ineq{}};
         }
@@ -661,11 +685,11 @@ namespace clarkson {
         const VT& b_l = P.getLowerBounds();
         const VT& b_u = P.getUpperBounds();
 
-        // Starts with all inequalities relaxed
+        // Starts with all inequalities relaxed.
         for (unsigned j = 0; j < d; ++j)
             highs.changeColBounds((HighsInt)j, -kHighsInf, kHighsInf);
 
-        // Holds the inequalities with unknown redundancy status
+        // Holds the inequalities with unknown redundancy status.
         std::set<Ineq> J;
         for (unsigned k = 0; k < d; ++k) {
             if (!std::isinf((double)b_l(k))) J.insert(Ineq{k, false});
@@ -678,7 +702,7 @@ namespace clarkson {
         std::vector<unsigned> fail_count(d, 0);
 
         while (!J.empty()) {
-            // Picks constraints at random to make progress when LPs fail
+            // Picks constraints at random to make progress when LPs fail.
             std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
             auto it = J.begin();
             std::advance(it, pick(rng));
@@ -689,11 +713,9 @@ namespace clarkson {
             auto [is_redundant, ineq] = clarkson(highs, P, z, k_ineq, config, success);
 
             if (!success) {
-                if (config.verbose) {
-                    std::cerr << "clarkson: LP Failed on coordinate " << k_ineq.k
-                              << (k_ineq.is_upper ? " upper" : " lower")
-                              << std::endl;
-                }
+                log_diagnostics(config.log_at(VerbosityLevel::Detailed),
+                                "clarkson: LP Failed on coordinate ", k_ineq.k,
+                                (k_ineq.is_upper ? " upper" : " lower"));
 
                 if (++fail_count[k_ineq.k] > config.failed_iter_count) {
                     for (Ineq const& j : J) {
@@ -708,11 +730,13 @@ namespace clarkson {
                 J.erase(k_ineq);
             } else {
                 if (!J.erase(ineq)) {
-                    if (config.verbose) {
-                        std::cerr << "clarkson: hit already essential inequality"
-                                << k_ineq.k << (k_ineq.is_upper ? " upper" : " lower")
-                                << std::endl;
-                    }
+                    log_diagnostics(config.log_at(VerbosityLevel::Detailed),
+                                    "clarkson: hit already essential inequality ",
+                                    ineq.k, (ineq.is_upper ? " upper" : " lower"),
+                                    ", marking ", k_ineq.k,
+                                    (k_ineq.is_upper ? " upper" : " lower"),
+                                    " as essential instead");
+                
                     I.push_back(k_ineq);
                     enforce_ineq(highs, P, k_ineq);
                     J.erase(k_ineq);
@@ -751,31 +775,85 @@ namespace clarkson {
 
         Highs highs;
         Result<Point> res;
-        configure_highs(highs);
+        configure_highs(highs, config);
         build_lp_model(P, highs);
 
-        // Removes degenerate facets
-        res.P = fix_dimensions(highs, P, config);
-        res.dims_fixed = res.P.getNumEqualities()-P.getNumEqualities();
+        // Verifies the LP is not empty
+        highs.run();
+        if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: initial LP failed with status ",
+                            (int)highs.getModelStatus());
 
-        if (config.verbose) {
-            std::cerr << "clarkson: fixed " << res.dims_fixed << " dimensions"
-                      << std::endl;
+            res.success = false;
+            res.P = P;
+            return res;
         }
 
-        // Looks for an interior point of P, such a point is essential for clarkson
+        log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                        "clarkson: starting simplification on polytope with ",
+                        P.getDimension(), " reactions, ", 
+                        P.getNumEqualities(), " metabolites, and ",
+                        P.getNumFiniteBounds(), " finite bounds");
+
+        // Removes degenerate facets.
+        if (config.fix_dimensions) {
+            res.P = fix_dimensions(highs, P, config);
+            res.dims_fixed = res.P.getNumEqualities()-P.getNumEqualities();
+
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: fixed ", res.dims_fixed, " dimensions");
+        } else {
+            res.P = P;
+            res.dims_fixed = 0;
+
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: dimension fixing disabled");
+        }
+
+
+        // Looks for an interior point of P, such a point is essential for clarkson.
         VT z;
         bool success;
         find_interior_point(res.P, config, z, success);
-        if (!success) {
-            res.success = false;
-            return res;
+  
+        if (success) {
+            res.P = redundancy_removal_clarkson(highs, res.P, z, config);
+        } else {
+            log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                            "clarkson: interior point not found, falling back to the exhaustive method");
+
+            exhaustive_simplification::Config exhaustive_config;
+            exhaustive_config.verbosity = config.verbosity;
+            exhaustive_config.log_stream = config.log_stream;
+            exhaustive_config.facet_tolerance = config.facet_tolerance;
+            exhaustive_config.dim_tolerance = config.dim_tolerance;
+            exhaustive_config.fix_dimensions = false;                   // Either fixed or the caller doesn't want dimension fixing.
+
+            auto exhaustive_res = exhaustive_simplification::simplify(
+                res.P, exhaustive_config
+            );
+
+            if (!exhaustive_res.success) {
+                log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                                "clarkson: exhaustive simplification also failed, returning the dimension fixed polytope");
+
+                res.success = false;
+                return res;
+
+            }
+            res.P = exhaustive_res.P;
         }
         
-        // Runs clarkson's algorithm
-        res.P = redundancy_removal_clarkson(highs, res.P, z, config);
+        // Collects the statistics.
         res.bounds_relaxed = P.getNumFiniteBounds()-res.P.getNumFiniteBounds();
         res.success = true;
+
+        log_diagnostics(config.log_at(VerbosityLevel::Summary),
+                        "clarkson: simplification finished, fixed ", res.dims_fixed,
+                        " dimensions, relaxed ", res.bounds_relaxed,
+                        " bounds");
+
         return res;
     }
 }

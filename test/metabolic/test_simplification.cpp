@@ -11,7 +11,7 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "preprocess/metabolic/metabolic_simplification.hpp"
+#include "preprocess/metabolic/simplification.hpp"
 
 typedef double NT;
 typedef Cartesian<NT> Kernel;

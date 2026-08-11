@@ -11,7 +11,8 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "preprocess/metabolic/simplification.hpp"
+#include "preprocess/metabolic/exhaustive_simplification.hpp"
+#include "preprocess/metabolic/clarkson_simplification.hpp"
 
 typedef double NT;
 typedef Cartesian<NT> Kernel;
@@ -20,11 +21,37 @@ typedef MetabolicPolytope<Point> Polytope;
 typedef typename Polytope::MT MT;
 typedef typename Polytope::VT VT;
 
+struct Exhaustive {
+    static exhaustive_simplification::Result<Point> run(Polytope const& P, 
+                                                        bool fix_dimensions)
+    {
+        exhaustive_simplification::Config config;
+        config.fix_dimensions = fix_dimensions;
+        return exhaustive_simplification::simplify(P, config);
+    }
+
+    static char const* name() {return "exhaustive";}
+};
+
+struct Clarkson {
+    static clarkson_simplification::Result<Point> run(Polytope const& P, 
+                                                      bool fix_dimensions)
+    {
+        clarkson_simplification::Config config;
+        config.fix_dimensions = fix_dimensions;
+        return clarkson_simplification::simplify(P, config);
+    }
+
+    static char const* name() {return "clarkson";}
+};
+
+template <typename Simplifier>
 void test_cube_no_change(unsigned d) 
-{
+{   
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope::cube(d);
-    simplification::Config config;
-    auto result = simplification::simplify(P1, config);
+    auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
     CHECK(result.bounds_relaxed == 0);
@@ -35,6 +62,7 @@ void test_cube_no_change(unsigned d)
     CHECK(P2.getEqualityBounds() == P1.getEqualityBounds());
 }
 
+template <typename Simplifier>
 void test_cube_relaxed_bounds(unsigned d) 
 {
     unsigned m = 2*d;
@@ -61,8 +89,10 @@ void test_cube_relaxed_bounds(unsigned d)
         b_u(i) = 1.0;
     }
 
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    auto result = simplification::simplify(P1);
+    auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
     CHECK(result.bounds_relaxed == 2*d);
@@ -71,11 +101,13 @@ void test_cube_relaxed_bounds(unsigned d)
     CHECK(P2.getEqualityBounds() == P1.getEqualityBounds());
 }
 
+template <typename Simplifier>
 void test_simplex_relaxed_bounds(unsigned d) 
 {
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope::simplex(d);
-    simplification::Config config;
-    auto result = simplification::simplify(P1, config);
+    auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
     // Every upper bound is infinity
@@ -90,6 +122,7 @@ void test_simplex_relaxed_bounds(unsigned d)
     CHECK(P1.getEqualityBounds() == P2.getEqualityBounds());
 }
 
+template <typename Simplifier>
 void test_cube_degenerate_dimensions(unsigned d) 
 {
     unsigned m = 2*d;
@@ -108,25 +141,24 @@ void test_cube_degenerate_dimensions(unsigned d)
         b_u(i) = 1.0+1e-12;
     }
 
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    simplification::Config config;
-    config.fix_dimensions = true;
-    auto result = simplification::simplify(P1, config);
-    Polytope P2 = result.P;
+    auto result = Simplifier::run(P1, true);
 
     CHECK(result.bounds_relaxed == 2*d);
     CHECK(result.dims_fixed == d);
 }
 
-TEST_CASE("test_no_change") {
-    test_cube_no_change(10);
+TEST_CASE_TEMPLATE("test_no_change", Simplifier, Exhaustive, Clarkson) {
+    test_cube_no_change<Simplifier>(10);
 }
 
-TEST_CASE("test_no_dimension_fixing") {
-    test_simplex_relaxed_bounds(10);
-    test_cube_relaxed_bounds(10);
+TEST_CASE_TEMPLATE("test_no_dimension_fixing", Simplifier, Exhaustive, Clarkson) {
+    test_simplex_relaxed_bounds<Simplifier>(10);
+    test_cube_relaxed_bounds<Simplifier>(10);
 }
 
-TEST_CASE("test_dimension_fixing") {
-    test_cube_degenerate_dimensions(10);
+TEST_CASE_TEMPLATE("test_dimension_fixing", Simplifier, Exhaustive, Clarkson) {
+    test_cube_degenerate_dimensions<Simplifier>(10);
 }

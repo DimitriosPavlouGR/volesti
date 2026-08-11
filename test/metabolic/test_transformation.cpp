@@ -11,7 +11,8 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "preprocess/metabolic/simplification.hpp"
+#include "preprocess/metabolic/exhaustive_simplification.hpp"
+#include "preprocess/metabolic/clarkson_simplification.hpp"
 #include "preprocess/metabolic/transformation.hpp"
 #include "random_walks/random_walks.hpp"
 #include "volume/volume_cooling_balls.hpp"
@@ -27,6 +28,30 @@ typedef Eigen::Matrix<NT, Eigen::Dynamic, Eigen::Dynamic> DenseMT;
 typedef typename Polytope::MT MT;
 typedef typename Polytope::VT VT;
 typedef BoostRandomNumberGenerator<boost::mt19937, double> RNG;
+
+struct Exhaustive {
+    static exhaustive_simplification::Result<Point> run(Polytope const& P, 
+                                                        bool fix_dimensions)
+    {
+        exhaustive_simplification::Config config;
+        config.fix_dimensions = fix_dimensions;
+        return exhaustive_simplification::simplify(P, config);
+    }
+
+    static char const* name() {return "exhaustive";}
+};
+
+struct Clarkson {
+    static clarkson_simplification::Result<Point> run(Polytope const& P, 
+                                                      bool fix_dimensions)
+    {
+        clarkson_simplification::Config config;
+        config.fix_dimensions = fix_dimensions;
+        return clarkson_simplification::simplify(P, config);
+    }
+
+    static char const* name() {return "clarkson";}
+};
 
 NT compute_median_volume(HPolytope<Point> & HP,
                          double e,
@@ -81,6 +106,7 @@ bool check_sampling(Polytope const& P,
     return true;
 }
 
+template <typename Simplifier>
 void test_cube_transformation(unsigned d) 
 {
     unsigned m = 2*d;
@@ -99,10 +125,10 @@ void test_cube_transformation(unsigned d)
         b_u(i) = 1.0+1e-12;
     }
 
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    simplification::Config config;
-    config.fix_dimensions = true;
-    auto res = simplification::simplify(P1, config);
+    auto res = Simplifier::run(P1, true);
     Polytope P2 = res.P;
 
     auto trs_res = transform(P2);
@@ -118,10 +144,13 @@ void test_cube_transformation(unsigned d)
     CHECK(check_sampling(P1, HP, N, shift, 25)); // checks sampling
 }
 
+template <typename Simplifier>
 void test_simplex_transformation(unsigned d) 
-{
+{   
+    INFO("simplifier: " << Simplifier::name());
+
     Polytope P1 = Polytope::simplex(d);
-    auto result = simplification::simplify(P1);
+    auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
     auto trs_res = transform(P2);
@@ -139,10 +168,10 @@ void test_simplex_transformation(unsigned d)
     CHECK(check_sampling(P1, HP, N, shift, 25)); // checks sampling
 }
 
-TEST_CASE("test_cube_transformation") {
-    test_cube_transformation(10);
+TEST_CASE_TEMPLATE("test_cube_transformation", Simplifier, Exhaustive, Clarkson) {
+    test_cube_transformation<Simplifier>(10);
 }
 
-TEST_CASE("test_simplex_transformation") {
-    test_simplex_transformation(10);
+TEST_CASE_TEMPLATE("test_simplex_transformation", Simplifier, Exhaustive, Clarkson) {
+    test_simplex_transformation<Simplifier>(10);
 }

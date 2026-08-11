@@ -52,8 +52,17 @@ namespace exhaustive_simplification {
         // If true, degenerate dimensions are fixed.
         bool fix_dimensions = false;
 
-        double primal_feasibility_tol = 1e-9;
-        double dual_feasibility_tol = 1e-8;
+        // The primal feasibility tolerance of the LP solver.
+        double primal_feasibility_tol = 1e-7;
+
+        // The dual feasibility tolerance of the LP solver.
+        double dual_feasibility_tol = 1e-7;
+
+        // Iteration limit for the simplex solves.
+        double simplex_iter_limit = 1000;
+
+        // Solver time limit.
+        double time_limit = 200;
 
         // How much information is printed during simplification.
         VerbosityLevel verbosity = VerbosityLevel::Silent;
@@ -91,13 +100,29 @@ namespace exhaustive_simplification {
         bool success = true;
     };
 
+    // Applies the solver options shared by every lp in this file.
+    // @param highs the model to configure
+    // @param config the simplification configuration
+    inline void configure_highs(Highs & highs, Config const & config) {
+        highs.setOptionValue("output_flag", false);
+        highs.setOptionValue("solver", "simplex");
+        highs.setOptionValue("simplex_strategy", 4);
+        highs.setOptionValue("primal_feasibility_tolerance", config.primal_feasibility_tol);
+        highs.setOptionValue("dual_feasibility_tolerance", config.dual_feasibility_tol);
+        highs.setOptionValue("simplex_iteration_limit", config.simplex_iter_limit);
+        highs.setOptionValue("time_limit", config.time_limit);
+    }
+
+
     // Builds the LP that describes the feasible region of the Polytope.
     // @tparam Point the point type of the polytope
     // @param P the MetabolicPolytope
     // @param highs the highs model
     template <typename Point>
     void build_lp_model(MetabolicPolytope<Point> const& P, 
-                        Highs& highs) 
+                        Highs & highs,
+                        Config const& config
+                        ) 
     {
         typedef typename MetabolicPolytope<Point>::MT MT;
         typedef typename MetabolicPolytope<Point>::VT VT;
@@ -107,6 +132,9 @@ namespace exhaustive_simplification {
         const VT& b_l = P.getLowerBounds();
         const VT& b_eq = P.getEqualityBounds();
         unsigned d = P.getDimension();
+
+        // Sets solver options for HiGHS
+        configure_highs(highs, config);
 
         for (unsigned j = 0; j < d; ++j) {
             double low = std::isinf((double)b_l(j)) ? -kHighsInf : (double)b_l(j);
@@ -201,7 +229,10 @@ namespace exhaustive_simplification {
     {               
         typedef typename MetabolicPolytope<Point>::NT NT;
 
-        auto is_free = [](double bl, double bu){return std::isinf(bu) && std::isinf(bl);};
+        auto is_free = [](double bl, double bu){
+            return bu >= kHighsInf && bl <= -kHighsInf;
+        };
+
         auto fix_dimension = [](Highs & highs, unsigned k, NT val) {
             HighsInt id = k;
             double coeff = 1.0;
@@ -212,12 +243,7 @@ namespace exhaustive_simplification {
         unsigned d = P.getDimension();
 
         Highs highs;
-        highs.setOptionValue("output_flag", false);
-        highs.setOptionValue("solver", "simplex");
-        highs.setOptionValue("simplex_strategy", 4);
-        highs.setOptionValue("primal_feasibility_tolerance", config.primal_feasibility_tol);
-        highs.setOptionValue("dual_feasibility_tolerance", config.dual_feasibility_tol);
-        build_lp_model(P, highs);
+        build_lp_model(P, highs, config);
 
         // Verifies the LP is not empty
         highs.run();
@@ -244,9 +270,13 @@ namespace exhaustive_simplification {
         while (!simplified) {
             simplified = true;
 
+            unsigned fixed_this_pass = 0;
+            unsigned relaxed_this_pass = 0;
+
             for (unsigned k = 0; k < d; ++k) {
-                double bl = highs.getLp().col_lower_[k];
-                double bu = highs.getLp().col_upper_[k];
+                HighsLp const& lp = highs.getLp();
+                double bl = lp.col_lower_[k];
+                double bu = lp.col_upper_[k];
 
                 if (is_free(bl, bu)) continue;     // Skips removed constraints or equalities
 
@@ -278,7 +308,7 @@ namespace exhaustive_simplification {
                 // LP2: max with relaxed bound
                 // Skipped if there is no upper bound
                 bool upper_redundant = false;
-                if (!std::isinf(bu)) {
+                if (bu < kHighsInf) {
                     highs.changeColBounds(k, bl, bu+1.0);
                     bool lp_solved = run_lp("relaxed max");
                     NT max_val_relaxed = (NT)highs.getObjectiveValue();
@@ -297,7 +327,7 @@ namespace exhaustive_simplification {
                 // LP4: min with relaxed bound
                 // Skipped if there is no lower bound
                 bool lower_redundant = false;
-                if (!std::isinf(bl)) {
+                if (bl > -kHighsInf) {
                     highs.changeColBounds(k, bl-1.0, bu);
                     bool lp_solved = run_lp("relaxed min");
                     NT min_val_relaxed = (NT)highs.getObjectiveValue();
@@ -314,21 +344,31 @@ namespace exhaustive_simplification {
                     NT mid = (max_val+min_val)/NT(2);
                     fix_dimension(highs, k, mid);
                     simplified = false;
+                    ++fixed_this_pass;
+                    relaxed_this_pass += 2;
                     continue;
                 }
 
                 // Case2: Relax bounds
-                if (upper_redundant && !std::isinf(bu)) {
+                if (upper_redundant && bu < kHighsInf) {
                     highs.changeColBounds(k, bl, kHighsInf);
                     bu = highs.getLp().col_upper_[k];
                     simplified = false;
+                    ++relaxed_this_pass;
                 } 
-                if (lower_redundant && !std::isinf(bl)) {
+                if (lower_redundant && bl > -kHighsInf) {
                     highs.changeColBounds(k, -kHighsInf, bu);
                     simplified = false;
+                    ++relaxed_this_pass;
                 }
             }
             ++pass;
+
+            log_diagnostics(config.log_at(VerbosityLevel::Detailed),
+                            "exhaustive: pass ", pass,
+                            " relaxed ", relaxed_this_pass,
+                            " bounds, fixed ", fixed_this_pass,
+                            " dimensions");
         }
 
 

@@ -30,7 +30,7 @@ typedef typename Polytope::VT VT;
 // @param method the name of the method
 // @param bounds_relaxed the number of bounds relaxed
 // @param dims_fixed the number of dimensions fixed
-// @param sucess whether the simplification was successful
+// @param success whether the simplification was successful
 // @param elapsed_ms the time taken in milliseconds
 void print_row(char const* method,
                unsigned bounds_relaxed,
@@ -56,7 +56,7 @@ void benchmark(std::string const& model, bool dimension_fixing) {
               << " (n = " << P.getDimension()
               << ", m = " << P.getNumEqualities()
               << ", finite bounds = " << P.getNumFiniteBounds()
-              << ", dimension fixing = " << (dimension_fixing ? "true" : " false")
+              << ", dimension fixing = " << (dimension_fixing ? "true" : "false")
               << ") ---" << std::endl;
 
 
@@ -69,14 +69,13 @@ void benchmark(std::string const& model, bool dimension_fixing) {
     
     exhaustive_simplification::Config exhaustive_config;
     exhaustive_config.fix_dimensions = dimension_fixing;
-
+    
     auto ex_start = std::chrono::high_resolution_clock::now();
     auto ex_result = exhaustive_simplification::simplify(P, exhaustive_config);
     auto ex_end = std::chrono::high_resolution_clock::now();
-    double ex_elapsed_ms = std::chrono::duration<double>(ex_end-ex_start).count();
+    double ex_elapsed_s = std::chrono::duration<double>(ex_end-ex_start).count();
 
-    print_row("exhaustive", ex_result.bounds_relaxed, ex_result.dims_fixed, ex_result.success, ex_elapsed_ms);
-
+    print_row("exhaustive", ex_result.bounds_relaxed, ex_result.dims_fixed, ex_result.success, ex_elapsed_s);
         
     clarkson_simplification::Config clarkson_config;
     clarkson_config.fix_dimensions = dimension_fixing;
@@ -84,9 +83,9 @@ void benchmark(std::string const& model, bool dimension_fixing) {
     auto cl_start = std::chrono::high_resolution_clock::now();
     auto cl_result = clarkson_simplification::simplify(P, clarkson_config);
     auto cl_end = std::chrono::high_resolution_clock::now();
-    double cl_elapsed_ms = std::chrono::duration<double>(cl_end-cl_start).count();
+    double cl_elapsed_s = std::chrono::duration<double>(cl_end-cl_start).count();
     
-    print_row("clarkson", cl_result.bounds_relaxed, cl_result.dims_fixed, cl_result.success, cl_elapsed_ms);
+    print_row("clarkson", cl_result.bounds_relaxed, cl_result.dims_fixed, cl_result.success, cl_elapsed_s);
 }
 
 int main() {

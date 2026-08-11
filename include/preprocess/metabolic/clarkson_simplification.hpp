@@ -62,8 +62,17 @@ namespace clarkson_simplification {
         // will usually send the run down the exhaustive fallback.
         bool fix_dimensions = false;
         
-        double primal_feasibility_tol = 1e-9;
-        double dual_feasibility_tol = 1e-8;
+        // The primal feasibility tolerance of the LP solver.
+        double primal_feasibility_tol = 1e-7;
+
+        // The dual feasibility tolerance of the LP solver.
+        double dual_feasibility_tol = 1e-7;
+
+        // Iteration limit for the simplex solves.
+        double simplex_iter_limit = 1000;
+
+        // Solver time limit.
+        double time_limit = 200;
 
         // If true, it prints diagnostic information about the simplification
         // process.
@@ -171,6 +180,7 @@ namespace clarkson_simplification {
     
     // Applies the solver options shared by every lp in this file.
     // @param highs the model to configure
+    // @param config the simplification configuration
     inline void configure_highs(Highs & highs, Config const & config) {
         highs.setOptionValue("output_flag", false);
         highs.setOptionValue("solver", "simplex");
@@ -178,6 +188,8 @@ namespace clarkson_simplification {
         highs.setOptionValue("simplex_strategy", 4);
         highs.setOptionValue("primal_feasibility_tolerance", config.primal_feasibility_tol);
         highs.setOptionValue("dual_feasibility_tolerance", config.dual_feasibility_tol);
+        highs.setOptionValue("simplex_iteration_limit", config.simplex_iter_limit);
+        highs.setOptionValue("time_limit", config.time_limit);
     }
 
     // Builds the LP that describes the feasible region of the Polytope.
@@ -186,7 +198,9 @@ namespace clarkson_simplification {
     // @param highs the highs model
     template <typename Point>
     void build_lp_model(MetabolicPolytope<Point> const& P, 
-                        Highs& highs) 
+                        Highs& highs,
+                        Config const& config
+                        ) 
     {
         typedef typename MetabolicPolytope<Point>::MT MT;
         typedef typename MetabolicPolytope<Point>::VT VT;
@@ -196,6 +210,9 @@ namespace clarkson_simplification {
         const VT& b_l = P.getLowerBounds();
         const VT& b_eq = P.getEqualityBounds();
         unsigned d = P.getDimension();
+
+        // Sets solver options for HiGHS
+        configure_highs(highs, config);
 
         for (unsigned j = 0; j < d; ++j) {
             double low = std::isinf((double)b_l(j)) ? -kHighsInf : (double)b_l(j);
@@ -775,8 +792,7 @@ namespace clarkson_simplification {
 
         Highs highs;
         Result<Point> res;
-        configure_highs(highs, config);
-        build_lp_model(P, highs);
+        build_lp_model(P, highs, config);
 
         // Verifies the LP is not empty
         highs.run();

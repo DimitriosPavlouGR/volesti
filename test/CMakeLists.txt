@@ -31,6 +31,14 @@ option(DISABLE_NLP_ORACLES "Disable non-linear oracles (used in collocation)" ON
 option(BUILTIN_EIGEN "Use eigen from ../external" OFF)
 option(BUILTIN_AUTODIFF "Use autodiff from ../external" ON)
 option(USE_MKL "Use MKL library to build eigen" OFF)
+option(USE_HIGHS "Use HiGHS instead of lp_solve for the LP oracles" OFF)
+
+if (USE_HIGHS)
+  add_definitions(-DUSE_HIGHS)
+  set(LP_BACKEND highs::highs)
+else()
+  set(LP_BACKEND lp_solve)
+endif()
 
 if(DISABLE_NLP_ORACLES)
   add_definitions(-DDISABLE_NLP_ORACLES)
@@ -445,6 +453,21 @@ add_executable(benchmark_simplification metabolic/benchmark_simplification.cpp)
 target_include_directories(benchmark_simplification PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(benchmark_simplification PRIVATE BIGG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bigg")
 
+add_executable(test_solve_lp lp_oracles/test_solve_lp.cpp $<TARGET_OBJECTS:test_main>)
+target_include_directories(test_solve_lp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_chebychev_cube COMMAND test_solve_lp -tc=test_chebychev_cube)
+add_test(NAME test_intersection COMMAND test_solve_lp -tc=test_intersection)
+
+add_executable(test_vpolyoracles lp_oracles/test_vpolyoracles.cpp $<TARGET_OBJECTS:test_main>)
+target_include_directories(test_vpolyoracles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_v_membership COMMAND test_vpolyoracles -tc=test_v_membership)
+add_test(NAME test_v_line_intersection COMMAND test_vpolyoracles -tc=test_v_line_intersection)
+
+add_executable(test_zpolyoracles lp_oracles/test_zpolyoracles.cpp $<TARGET_OBJECTS:test_main>)
+target_include_directories(test_zpolyoracles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_z_membership COMMAND test_zpolyoracles -tc=test_z_membership)
+add_test(NAME test_z_line_intersection COMMAND test_zpolyoracles -tc=testz_line_intersection)
+
 set(ADDITIONAL_FLAGS "-march=native -DSIMD_LEN=0 -DTIME_KEEPING")
 
 #set_target_properties(benchmarks_crhmc
@@ -485,7 +508,7 @@ TARGET_LINK_LIBRARIES(root_finders_test ${PTHREAD} ${GMP} ${MPSOLVE} ${FFTW3} ${
 TARGET_LINK_LIBRARIES(crhmc_polytope_preparation_test ${PTHREAD} ${GMP} ${MPSOLVE} ${FFTW3} ${MKL_LINK} QD_LIB coverage_config)
 TARGET_LINK_LIBRARIES(logconcave_sampling_test lp_solve ${IFOPT} ${IFOPT_IPOPT} ${PTHREAD} ${GMP} ${MPSOLVE} ${FFTW3} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(crhmc_sampling_test lp_solve ${IFOPT} ${IFOPT_IPOPT} ${PTHREAD} ${GMP} ${MPSOLVE} ${FFTW3} ${MKL_LINK} QD_LIB coverage_config)
-TARGET_LINK_LIBRARIES(order_polytope lp_solve coverage_config)
+TARGET_LINK_LIBRARIES(order_polytope ${LP_BACKEND} coverage_config)
 TARGET_LINK_LIBRARIES(matrix_sampling_test lp_solve ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_internal_points lp_solve ${MKL_LINK} coverage_config)
 find_package(LAPACK REQUIRED)
@@ -496,3 +519,6 @@ TARGET_LINK_LIBRARIES(test_metabolic_polytope highs::highs nlohmann_json::nlohma
 TARGET_LINK_LIBRARIES(test_simplification highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_transformation highs::highs lp_solve ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(benchmark_simplification highs::highs nlohmann_json::nlohmann_json coverage_config)
+TARGET_LINK_LIBRARIES(test_solve_lp ${LP_BACKEND} coverage_config)
+TARGET_LINK_LIBRARIES(test_vpolyoracles ${LP_BACKEND} coverage_config)
+TARGET_LINK_LIBRARIES(test_zpolyoracles ${LP_BACKEND} coverage_config)

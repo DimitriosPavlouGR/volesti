@@ -8,15 +8,15 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
-#ifndef SOLVE_LP_H
-#define SOLVE_LP_H
+#ifndef CONFIGURE_HIGHS_HPP
+#define CONFIGURE_HIGHS_HPP
 
-// Selects the LP library at compile time. lp_solve remains the default,
-// HiGHS is used when VOLESTI_USE_HIGHS is defined.
-#ifdef USE_HIGHS
-    #include "lp_oracles/solve_lp_highs.hpp"
-#else
-    #include "lp_oracles/solve_lp_lpsolve.h"
-#endif
+#include "Highs.h"
+
+// Configures highs for the lp oracles.
+inline void lp_oracles_configure_highs(Highs & highs) {
+    highs.setOptionValue("output_flag", false);
+    highs.setOptionValue("solver", "simplex");
+}
 
 #endif

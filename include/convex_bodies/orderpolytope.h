@@ -13,6 +13,7 @@
 
 #include <iostream>
 #include "misc/poset.h"
+#include "math.h"
 #include <Eigen/Eigen>
 #include "preprocess/max_inscribed_ball.hpp"
 #ifndef DISABLE_LPSOLVE

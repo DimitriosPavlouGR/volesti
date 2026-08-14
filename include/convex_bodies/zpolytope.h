@@ -38,7 +38,7 @@ private:
     NT                   maxNT = std::numeric_limits<NT>::max();
     NT                   minNT = std::numeric_limits<NT>::lowest();
 
-    NT *conv_comb, *row_mem, *row;
+    double *conv_comb, *row_mem, *row;
     int                  *colno, *colno_mem;
     MT                   sigma;
     MT                   Q0;
@@ -50,9 +50,9 @@ public:
 
     Zonotope(const unsigned int &dim, const MT &_V, const VT &_b):
             _d{dim}, V{_V}, b{_b},
-            conv_comb{new NT[V.rows() + 1]},
-            row_mem{new NT[V.rows()]},
-            row{new NT[V.rows() + 1]},
+            conv_comb{new double[V.rows() + 1]},
+            row_mem{new double[V.rows()]},
+            row{new double[V.rows() + 1]},
             colno{new int[V.rows() + 1]},
             colno_mem{new int[V.rows()]}
     {
@@ -94,9 +94,9 @@ public:
             }
         }
 
-        conv_comb = new NT[Pin.size()];
-        row_mem = new NT[V.rows()];
-        row = new NT[V.rows() + 1];
+        conv_comb = new double[Pin.size()];
+        row_mem = new double[V.rows()];
+        row = new double[V.rows() + 1];
         colno = new int[V.rows() + 1];
         colno_mem = new int[V.rows()];
 
@@ -576,7 +576,7 @@ public:
 
         int count = 0;
         MT Fmat(_d-1,_d);
-        const NT e = 0.0000000001;
+        const double e = 0.0000000001;
         for (int j = 0; j < num_of_generators(); ++j)
         {
             if (((1.0 - *(conv_comb + j) ) > e || (1.0 - *(conv_comb + j) )
@@ -609,7 +609,7 @@ public:
 
         int count = 0;
         MT Fmat(_d-1,_d);
-        const NT e = 0.0000000001;
+        const double e = 0.0000000001;
         for (int j = 0; j < num_of_generators(); ++j) {
             if (((1.0 - *(conv_comb + j) ) > e || (1.0 - *(conv_comb + j) ) > e*std::abs(*(conv_comb + j))) &&
                 ((1.0 + *(conv_comb + j) ) > e || (1.0 + *(conv_comb + j) ) > e*std::abs(*(conv_comb + j)))) {

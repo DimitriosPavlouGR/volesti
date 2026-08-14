@@ -93,7 +93,7 @@ template <typename NT, typename MT, typename Point>
 std::tuple<NT, NT, bool> intersect_line_zono(MT const& V, Point const& p, Point const& v,
                                              LPOracleOptions const& opts = nullptr)
 {
-    std::vector<NT> conv_comb(V.rows());
+    std::vector<double> conv_comb(V.rows());
     auto [l1, ok1] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, true, opts);
     auto [l2, ok2] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, true, opts);
     return {l1, l2, ok1 && ok2};

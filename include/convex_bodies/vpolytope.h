@@ -38,7 +38,7 @@ private:
     std::pair<Point, NT> _inner_ball;
 
     // TODO: Why don't we use std::vector<REAL>  and std::vector<int> for these pointers?
-    NT *conv_comb, *conv_comb2, *conv_mem, *row;
+    double *conv_comb, *conv_comb2, *conv_mem, *row;
     int *colno, *colno_mem;
 
 public:
@@ -46,10 +46,10 @@ public:
 
     VPolytope(const unsigned int &dim, const MT &_V, const VT &_b):
             _d{dim}, V{_V}, b{_b},
-            conv_comb{new NT[V.rows() + 1]},
-            conv_comb2{new NT[V.rows() + 1]},
-            conv_mem{new NT[V.rows()]},
-            row{new NT[V.rows() + 1]},
+            conv_comb{new double[V.rows() + 1]},
+            conv_comb2{new double[V.rows() + 1]},
+            conv_mem{new double[V.rows()]},
+            row{new double[V.rows() + 1]},
             colno{new int[V.rows() + 1]},
             colno_mem{new int[V.rows()]}
     {
@@ -69,10 +69,10 @@ public:
                 V(i - 1, j - 1) = Pin[i][j];
             }
         }
-        conv_comb = new NT[Pin.size()];
-        conv_comb2 = new NT[Pin.size()];
-        conv_mem = new NT[V.rows()];
-        row = new NT[V.rows() + 1];
+        conv_comb = new double[Pin.size()];
+        conv_comb2 = new double[Pin.size()];
+        conv_mem = new double[V.rows()];
+        row = new double[V.rows() + 1];
         colno = new int[V.rows() + 1];
         colno_mem = new int[V.rows()];
     }
@@ -124,10 +124,10 @@ public:
 
     VPolytope(const VPolytope& other) :
             _d{other._d}, V{other.V}, b{other.b},
-            conv_comb{new NT[V.rows() + 1]},
-            conv_comb2{new NT[V.rows() + 1]},
-            conv_mem{new NT[V.rows()]},
-            row{new NT[V.rows() + 1]},
+            conv_comb{new double[V.rows() + 1]},
+            conv_comb2{new double[V.rows() + 1]},
+            conv_mem{new double[V.rows()]},
+            row{new double[V.rows() + 1]},
             colno{new int[V.rows() + 1]},
             colno_mem{new int[V.rows()]}
     {

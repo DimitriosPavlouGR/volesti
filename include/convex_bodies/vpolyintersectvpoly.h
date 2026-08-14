@@ -15,6 +15,7 @@
 #include <iostream>
 #include <iterator>
 #include <vector>
+#include <tuple>
 #include "sampling/sphere.hpp"
 
 /// This class represents the intersection of two V-polytopes
@@ -131,8 +132,8 @@ public:
         int k = P1.get_mat().rows() + P2.get_mat().rows();
         RNGType rng(k);
         rng.set_seed(seed);
-        PointInIntersection<VT>(P1.get_mat(), P2.get_mat(),
-                                GetDirection<Point>::apply(k, rng), empty);
+        empty = std::get<1>(PointInIntersection<VT>(P1.get_mat(), P2.get_mat(),
+                                GetDirection<Point>::apply(k, rng)));
         return !empty;
     }
 
@@ -152,7 +153,7 @@ public:
         while(num<d+1){
 
             direction = GetDirection<Point>::apply(k, rng);
-            p = PointInIntersection<VT>(V1, V2, direction, same);
+            p = std::get<0>(PointInIntersection<VT>(V1, V2, direction));
 
             same = false;
             rvert = vertices.begin();

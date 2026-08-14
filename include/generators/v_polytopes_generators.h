@@ -89,10 +89,10 @@ Polytope random_vpoly_incube(unsigned int d, unsigned int k, double seed = std::
     typedef typename Polytope::PointType PointType;
     typedef PointType Point;
 
-    REAL *conv_mem;
+    double *conv_mem;
     int *colno_mem;
 
-    conv_mem = (REAL *) malloc(k * sizeof(*conv_mem));
+    conv_mem = (double *) malloc(k * sizeof(*conv_mem));
     colno_mem = (int *) malloc(k * sizeof(*colno_mem));
 
     unsigned rng_seed = std::chrono::system_clock::now().time_since_epoch().count();

@@ -32,9 +32,6 @@ GetSpectra()
 include("../../external/cmake-files/HiGHS.cmake")
 GetHighs()
 
-include("../../external/cmake-files/LPSolve.cmake")
-GetLPSolve()
-
 include("../../external/cmake-files/SuiteSparse.cmake")
 GetSuiteSparse()
 
@@ -62,4 +59,4 @@ add_definitions(${CXX_COVERAGE_COMPILE_FLAGS} "-DBOOST_NO_AUTO_PTR")
 find_package(LAPACK REQUIRED)
 find_package(BLAS REQUIRED)
 add_executable(metabolic_simplification metabolic_simplification.cpp)
-TARGET_LINK_LIBRARIES(metabolic_simplification highs::highs lp_solve ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK})
+TARGET_LINK_LIBRARIES(metabolic_simplification highs::highs ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK})

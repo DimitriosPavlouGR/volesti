@@ -107,7 +107,7 @@ std::tuple<bool, bool> memLP_Vpoly(const MT& V, const Point& q,
 // solved successfully.
 template <typename NT, typename MT, typename Point>
 std::tuple<NT, bool> intersect_line_Vpoly(MT const& V, Point const& p, Point const& v,
-                                          NT *conv_comb, bool maxi, bool zonotope,
+                                          double *conv_comb, bool maxi, bool zonotope,
                                           LPOracleOptions const& opts = nullptr)
 {
     unsigned d = v.dimension();
@@ -162,7 +162,7 @@ std::tuple<NT, bool> intersect_line_Vpoly(MT const& V, Point const& p, Point con
 
     const auto& sol = highs.getSolution().col_value;
     for (unsigned i = 0; i < m; ++i) {
-        conv_comb[i] = (NT)sol[i];
+        conv_comb[i] = sol[i];
     }
 
     return {NT(-highs.getObjectiveValue()), true};
@@ -184,7 +184,7 @@ template <typename NT, typename MT, typename Point>
 std::tuple<NT, NT, bool> intersect_double_line_Vpoly(MT const& V, Point const& p, Point const& v,
                                                      LPOracleOptions const& opts = nullptr)
 {
-    std::vector<NT> conv_comb(V.rows());
+    std::vector<double> conv_comb(V.rows());
     auto [l1, ok1] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, false, opts);
     auto [l2, ok2] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, false, opts);
     return {l1, l2, ok1 && ok2};

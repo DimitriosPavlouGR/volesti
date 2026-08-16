@@ -113,7 +113,6 @@ namespace exhaustive_simplification {
         highs.setOptionValue("time_limit", config.time_limit);
     }
 
-
     // Builds the LP that describes the feasible region of the Polytope.
     // @tparam Point the point type of the polytope
     // @param P the MetabolicPolytope
@@ -370,7 +369,6 @@ namespace exhaustive_simplification {
                             " bounds, fixed ", fixed_this_pass,
                             " dimensions");
         }
-
 
         Result<Point> result;
         MetabolicPolytope<Point> Pnew;

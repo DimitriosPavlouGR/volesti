@@ -19,6 +19,7 @@
 #include "preprocess/metabolic/exhaustive_simplification.hpp"
 #include "preprocess/metabolic/clarkson_simplification.hpp"
 #include "preprocess/metabolic/transformation.hpp"
+#include "preprocess/metabolic/scaling.hpp"
 #include "random_walks/random_walks.hpp"
 #include "volume/volume_cooling_balls.hpp"
 #include "generators/boost_random_number_generator.hpp"
@@ -52,7 +53,10 @@ int main(int argc, char* argv[]) {
     config.fix_dimensions = true; 
     config.verbosity = clarkson_simplification::VerbosityLevel::Summary;
     
-    auto result = clarkson_simplification::simplify(P, config);
+    Scaling<Point> s;
+    Polytope Sp = scale(P, s);
+
+    auto result = clarkson_simplification::simplify(Sp, config);
 
     if (!result.success) {
         std::cerr << "simplification failed" << std::endl;
@@ -64,6 +68,7 @@ int main(int argc, char* argv[]) {
               << " bounds relaxed   : " << result.bounds_relaxed << "\n"
               << " dimensions fixed : " << result.dims_fixed << std::endl;
     
+    return 0;
     // Transforms the simplified polytope, giving a full dimensional H-Polytope
     // that volume estimation can work with.
     auto trans_result = transform(result.P);

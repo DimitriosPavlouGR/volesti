@@ -457,6 +457,11 @@ target_include_directories(test_zpolyoracles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 add_test(NAME test_z_membership COMMAND test_zpolyoracles -tc=test_z_membership)
 add_test(NAME test_z_line_intersection COMMAND test_zpolyoracles -tc=testz_line_intersection)
 
+add_executable(test_scaling metabolic/test_scaling.cpp $<TARGET_OBJECTS:test_main>)
+target_include_directories(test_scaling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME test_no_scaling COMMAND test_scaling -tc=test_no_scaling)
+add_test(NAME test_scaling COMMAND test_scaling -tc=test_scaling)
+
 set(ADDITIONAL_FLAGS "-march=native -DSIMD_LEN=0 -DTIME_KEEPING")
 
 #set_target_properties(benchmarks_crhmc
@@ -511,3 +516,4 @@ TARGET_LINK_LIBRARIES(benchmark_simplification highs::highs nlohmann_json::nlohm
 TARGET_LINK_LIBRARIES(test_solve_lp highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_vpolyoracles highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_zpolyoracles highs::highs coverage_config)
+TARGET_LINK_LIBRARIES(test_scaling coverage_config)

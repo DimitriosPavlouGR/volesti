@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     config.verbosity = clarkson_simplification::VerbosityLevel::Summary;
     
     Scaling<Point> s;
-    Polytope Sp = scale(P, s);
+    Polytope Sp = scale(P, s, GMScaling{});
 
     auto result = clarkson_simplification::simplify(Sp, config);
 

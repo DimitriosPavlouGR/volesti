@@ -90,6 +90,10 @@ struct GMScaling {
     // Number of alternating column/row passes.
     unsigned passes = 5;
 
+    double scltol = 0.9;
+
+    double damp = 1e-4;
+    double tol = 1e-12;
 
     // Sets the scaling factors for the polytope.
     // @tparam Point the point type of the polytope
@@ -98,18 +102,17 @@ struct GMScaling {
     template<typename Point>
     void operator()(MetabolicPolytope<Point> const& P, Scaling<Point> & s) const {
         typedef typename MetabolicPolytope<Point>::MT MT;
-        typedef typename MetabolicPolytope<Point>::VT VT;
         typedef typename MetabolicPolytope<Point>::NT NT;
 
         MT const& A_eq = P.getEqualities();
-        VT const& b_u = P.getUpperBounds();
-        VT const& b_l = P.getLowerBounds();
         unsigned d = P.getDimension();
         unsigned m = (unsigned)A_eq.rows();
 
         std::vector<double> col(d, 1.0), row(m, 1.0), max_c, min_c;
 
         const double INF = std::numeric_limits<double>::infinity();
+        const double EPS = 2.2204e-16;
+        double aratio = 1e50;
 
         for (unsigned k = 0; k < passes; ++k) {
             max_c.assign(d, 0.0);
@@ -117,20 +120,70 @@ struct GMScaling {
 
             for (unsigned i = 0; i < m; ++i) {
                 for (typename MT::InnerIterator it(A_eq, i); it; ++it) {
-                    unsigned j = (unsigned)it.col();
                     double v = std::abs((double)it.value())/(double)row[i];
-                    max_c[i] = std::max(max_c[j], v);
+                    if (!v) continue;
+                    unsigned j = (unsigned)it.col();
+                    max_c[j] = std::max(max_c[j], v);
                     min_c[j] = std::min(min_c[j], v); 
                 }
             }
 
-            for (unsigned j = 0; j < d; ++j) {
-                if (max_c > 0.0) 
-                    col[j] = std::sqrt(max_c[])
+            double sratio = 0.0;
+            for (unsigned j = 0; j < d; ++j)
+                if (max_c[j] > 0.0) sratio = std::max(sratio, max_c[j]*(1.0/(1.0/min_c[j]+EPS)));
+
+            if (k > 0) {
+                for (unsigned j = 0; j < d; ++j) {
+                    if (max_c[j] <= 0.0) continue;
+                    col[j] = std::sqrt(std::max(min_c[j], damp*max_c[j])*max_c[j]);
+                }
+            }
+
+            if (k >= 2 && sratio >= aratio*scltol) 
+                break;
+
+            aratio = sratio;
+
+            for (unsigned j = 0; j < d; ++j) 
+                if (col[j] < tol) col[j] = 1.0;
+
+            max_c.assign(m, 0.0);
+            min_c.assign(m, INF);
+
+            for (unsigned i = 0; i < m; ++i) {
+                for (typename MT::InnerIterator it(A_eq, i); it; ++it) {
+                    double v = std::abs((double)it.value())/col[(unsigned)it.col()];
+                    if (v <= 0.0) continue;
+                    min_c[i] = std::min(min_c[i], v);
+                    max_c[i] = std::max(max_c[i], v);
+                }
+            }
+
+            for (unsigned i = 0; i < m; ++i) {
+                if (max_c[i] <= 0.0) continue;
+                row[i] = std::sqrt(std::max(min_c[i], damp*max_c[i])*max_c[i]);
             }
         }
+
+        for (unsigned i = 0; i < m; ++i)
+            if (row[i] == 0.0) row[i] = 1.0;
+
+        max_c.assign(d, 0.0);
+        for (unsigned i = 0; i < m; ++i) {
+            for (typename MT::InnerIterator it(A_eq, i); it; ++it) {
+                unsigned j = (unsigned)it.col();
+                max_c[j] = std::max(max_c[j], std::abs((double)it.value())/row[i]);
+            }
+        }
+
+        for (unsigned j = 0; j < d; ++j)
+            col[j] = max_c[j] > 0.0 ? max_c[j] : 1.0;
+
+        for (unsigned j = 0; j < d; ++j) s.col(j) = (NT)round_pow2(col[j]);
+        for (unsigned i = 0; i < m; ++i) s.row(i) = (NT)round_pow2(row[i]);
     }
 };
+
 
 // Leaves the metabolic polytope untouched, useful for debugging purposes.
 struct NoScaling {

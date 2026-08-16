@@ -31,5 +31,4 @@ inline void lp_oracles_configure_highs(Highs & highs, LPOracleOptions const& opt
         highs.setOptionValue("solver", "simplex");
     }
 }
-
 #endif

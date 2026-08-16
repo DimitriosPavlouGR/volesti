@@ -8,6 +8,10 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
+#include <vector>
+#include <list>
+#include <algorithm>
+#include <cmath>
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
@@ -60,7 +64,9 @@ NT compute_median_volume(HPolytope<Point> & HP,
 {
     std::vector<double> volumes;
     for (unsigned i = 0; i < num_trials; ++i) {
-        auto v = volume_cooling_balls<BallWalk, RNG, HPolytope<Point>>(HP, e, walk_len);
+        RNG rng(HP.dimension());
+        rng.set_seed(i);
+        auto v = volume_cooling_balls<BallWalk, HPolytope<Point>>(HP, rng, e, walk_len);
         volumes.push_back(v.second);
     }             
 
@@ -75,7 +81,7 @@ bool is_feasible(Polytope const& P, VT const& x, double tol = 1e-10) {
     VT const& b_u = P.getUpperBounds();
 
     // Checks that it meets lower/upper bounds
-    for (unsigned i = 0; i < x.size(); ++i) {
+    for (unsigned i = 0; i < (unsigned)x.size(); ++i) {
         if (!std::isinf((double)b_l(i)) && x(i) < b_l(i)-tol) return false;
         if (!std::isinf((double)b_u(i)) && x(i) > b_u(i)+tol) return false;
     }
@@ -94,6 +100,7 @@ bool check_sampling(Polytope const& P,
 {
     Point c = HP.ComputeInnerBall().first;
     RNG rng(HP.dimension());
+    rng.set_seed(0);
     std::list<Point> sampled;
     uniform_sampling<BilliardWalk>(
         sampled, HP, rng, 1, samples, c, 0
@@ -164,7 +171,7 @@ void test_simplex_transformation(unsigned d)
 
     CHECK(HP.dimension() == d-1);
     CHECK(volume > 0.90*actual_v);               // checks volume
-    CHECK (volume < 1.10*actual_v);
+    CHECK(volume < 1.10*actual_v);
     CHECK(check_sampling(P1, HP, N, shift, 25)); // checks sampling
 }
 

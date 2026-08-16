@@ -8,6 +8,8 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
+#include <limits>
+#include <vector>
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
@@ -20,6 +22,7 @@ typedef typename Kernel::Point Point;
 typedef MetabolicPolytope<Point> Polytope;
 typedef typename Polytope::MT MT;
 typedef typename Polytope::VT VT;
+static NT const INF = std::numeric_limits<NT>::infinity();
 
 struct Exhaustive {
     static exhaustive_simplification::Result<Point> run(Polytope const& P, 
@@ -80,7 +83,7 @@ void test_cube_relaxed_bounds(unsigned d)
     A_eq.makeCompressed();
 
     for (unsigned i = 0; i < d; ++i) {
-        b_l(i) = - 10.0;
+        b_l(i) = -10.0;
         b_u(i) = 10.0;
     }
 
@@ -95,10 +98,21 @@ void test_cube_relaxed_bounds(unsigned d)
     auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
+    // Checks the simplification statistics.
     CHECK(result.bounds_relaxed == 2*d);
     CHECK(result.dims_fixed == 0);
+
+    // Checks that equalities were untouched.
     CHECK(P2.getEqualities().isApprox(P1.getEqualities()));
     CHECK(P2.getEqualityBounds() == P1.getEqualityBounds());
+
+    // Checks that the first d reactions were relaxed.
+    CHECK((P2.getLowerBounds().head(d).array() == -INF).all());
+    CHECK((P2.getUpperBounds().head(d).array() == INF).all());
+
+    // The other m-d bounds must remain untouched.
+    CHECK(P2.getLowerBounds().tail(d) == P1.getLowerBounds().tail(d));
+    CHECK(P2.getUpperBounds().tail(d) == P1.getUpperBounds().tail(d));
 }
 
 template <typename Simplifier>
@@ -110,12 +124,14 @@ void test_simplex_relaxed_bounds(unsigned d)
     auto result = Simplifier::run(P1, false);
     Polytope P2 = result.P;
 
-    // Every upper bound is infinity
-    for (unsigned i = 0; i < d; ++i)
-        CHECK(std::isinf((double)P2.getUpperBounds()(i)));
-
+    // Checks statistics.
     CHECK(result.bounds_relaxed == d);
     CHECK(result.dims_fixed == 0);
+
+    // Checks every upper bound is infinity.
+    CHECK((P2.getUpperBounds().array() == INF).all());
+
+    // Checks that the rest are untouched.
     CHECK(P1.getDimension() == P2.getDimension());
     CHECK(P1.getLowerBounds() == P2.getLowerBounds());
     CHECK(P1.getEqualities().isApprox(P2.getEqualities()));
@@ -145,9 +161,23 @@ void test_cube_degenerate_dimensions(unsigned d)
 
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
     auto result = Simplifier::run(P1, true);
+    Polytope P2 = result.P;
 
+    // Checks statistics.
     CHECK(result.bounds_relaxed == 2*d);
     CHECK(result.dims_fixed == d);
+
+    // Checks that the pinned constraints were added to A_eq.
+    CHECK(P2.getNumEqualities() == d);
+    CHECK((unsigned)P2.getEqualityBounds().size() == d);
+
+    // Checks that the last d reactions were relaxed.
+    CHECK((P2.getLowerBounds().tail(d).array() == -INF).all());
+    CHECK((P2.getUpperBounds().tail(d).array() == INF).all());
+
+    // Checks that the rest of the bounds remain untouched.
+    CHECK(P2.getLowerBounds().head(d) == P1.getLowerBounds().head(d));
+    CHECK(P2.getUpperBounds().head(d) == P1.getUpperBounds().head(d));
 }
 
 TEST_CASE_TEMPLATE("test_no_change", Simplifier, Exhaustive, Clarkson) {

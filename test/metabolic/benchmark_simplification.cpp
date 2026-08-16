@@ -13,6 +13,7 @@
 #include "io/bigg_parser.hpp"
 #include "preprocess/metabolic/exhaustive_simplification.hpp"
 #include "preprocess/metabolic/clarkson_simplification.hpp"
+#include <algorithm>
 #include <iostream>
 #include <chrono>
 #include <iomanip>
@@ -23,27 +24,25 @@ typedef double NT;
 typedef Cartesian<NT> Kernel;
 typedef typename Kernel::Point Point;
 typedef MetabolicPolytope<Point> Polytope;
-typedef typename Polytope::MT MT;
-typedef typename Polytope::VT VT;
 
 // Prints a row of the benchmark table.
 // @param method the name of the method
 // @param bounds_relaxed the number of bounds relaxed
 // @param dims_fixed the number of dimensions fixed
 // @param success whether the simplification was successful
-// @param elapsed_ms the time taken in milliseconds
+// @param elapsed_s the time taken in seconds
 void print_row(char const* method,
                unsigned bounds_relaxed,
                unsigned dims_fixed,
                bool success,
-               double elapsed_ms)
+               double elapsed_s)
 {
     std::cout << " " << std::left << std::setw(12) << method
               << std::right << std::setw(8) << bounds_relaxed
               << std::setw(8) << dims_fixed
               << std::setw(10) << (success ? "OK" : "FAIL")
               << std::setw(10) << std::fixed << std::setprecision(3)
-              << elapsed_ms << "s" << std::endl;
+              << elapsed_s << "s" << std::endl;
 }
 
 // Runs both simplification methods on the same model and reports the results.
@@ -89,10 +88,17 @@ void benchmark(std::string const& model, bool dimension_fixing) {
 }
 
 int main() {
+    // Collects and sorts the models to maintain a fixed order in testing.
+    std::vector<std::filesystem::path> models;
     for (auto const& file : std::filesystem::directory_iterator(BIGG_DIR)) {
         if (file.path().extension() != ".json") continue;
-        benchmark(file.path().string(), false); // without dimension fixing
-        benchmark(file.path().string(), true);  // with dimension fixing
+        models.push_back(file.path());
+    }
+    std::sort(models.begin(), models.end());
+
+    for (auto const& model : models) {
+        benchmark(model.string(), false); // without dimension fixing
+        benchmark(model.string(), true);  // with dimension fixing
     }
 
     return 0;

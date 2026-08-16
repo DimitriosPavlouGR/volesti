@@ -8,6 +8,7 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
+#include <string>
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"

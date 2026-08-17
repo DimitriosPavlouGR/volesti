@@ -52,11 +52,8 @@ int main(int argc, char* argv[]) {
     clarkson_simplification::Config config;
     config.fix_dimensions = true; 
     config.verbosity = clarkson_simplification::VerbosityLevel::Summary;
-    
-    Scaling<Point> s;
-    Polytope Sp = scale(P, s, GMScaling{});
 
-    auto result = clarkson_simplification::simplify(Sp, config);
+    auto result = clarkson_simplification::simplify(P, config);
 
     if (!result.success) {
         std::cerr << "simplification failed" << std::endl;
@@ -67,8 +64,7 @@ int main(int argc, char* argv[]) {
               << " finite bounds    : " << result.P.getNumFiniteBounds() << "\n"
               << " bounds relaxed   : " << result.bounds_relaxed << "\n"
               << " dimensions fixed : " << result.dims_fixed << std::endl;
-    
-    return 0;
+
     // Transforms the simplified polytope, giving a full dimensional H-Polytope
     // that volume estimation can work with.
     auto trans_result = transform(result.P);

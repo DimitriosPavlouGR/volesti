@@ -358,7 +358,7 @@ public:
     // check if point p belongs to the convex hull of V-Polytope P
     int is_in(Point const& p, NT tol=NT(0)) const
     {
-        if(std::get<0>(memLP_Zonotope(V, p)))
+        if(memLP_Zonotope(V, p).value)
         {
             return -1;
         }
@@ -377,8 +377,8 @@ public:
             temp.assign(_d,0);
             temp[i] = 1.0;
             Point v(_d,temp.begin(), temp.end());
-            auto [l, ok] = intersect_line_Vpoly<NT>(V, center, v, conv_comb, false, true);
-            min_plus = l;
+            auto res = intersect_line_Vpoly<NT>(V, center, v, conv_comb, false, true);
+            min_plus = res.value;
             if (min_plus < radius) radius = min_plus;
         }
 
@@ -391,8 +391,8 @@ public:
     // with the Zonotope
     std::pair<NT,NT> line_intersect(Point const& r, Point const& v) const
     {
-        auto [l1, l2, ok] = intersect_line_zono<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_line_zono<NT>(V, r, v);
+        return res.value;
     }
 
 
@@ -403,8 +403,8 @@ public:
                                     VT const& Ar,
                                     VT const& Av) const
     {
-        auto [l1, l2, ok] = intersect_line_zono<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_line_zono<NT>(V, r, v);
+        return res.value;
     }
 
     // compute intersection point of ray starting from r and pointing to v
@@ -415,8 +415,8 @@ public:
                                     VT const& Av,
                                     NT const& lambda_prev) const
     {
-        auto [l1, l2, ok] = intersect_line_zono<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_line_zono<NT>(V, r, v);
+        return res.value;
     }
 
     std::pair<NT, int> line_positive_intersect(Point const& r,
@@ -425,7 +425,7 @@ public:
                                                VT const& Av) const
     {
         return std::pair<NT, int> (
-            std::get<0>(intersect_line_Vpoly<NT>(V, r, v, conv_comb, false, true)), 1);
+            intersect_line_Vpoly<NT>(V, r, v, conv_comb, false, true).value, 1);
     }
 
 
@@ -484,8 +484,8 @@ public:
         temp[rand_coord]=1.0;
         Point v(_d,temp.begin(), temp.end());
 
-        auto [l1, l2, ok] = intersect_line_zono<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_line_zono<NT>(V, r, v);
+        return res.value;
     }
 
 

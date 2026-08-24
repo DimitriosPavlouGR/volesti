@@ -31,4 +31,18 @@ inline void lp_oracles_configure_highs(Highs & highs, LPOracleOptions const& opt
         highs.setOptionValue("solver", "simplex");
     }
 }
+
+// The result of an lp oracle.
+//
+// value is meaningful only when solved is true, so callers should
+// test the result before reading it.
+// @tparam T the type of the value the oracle computes
+template <typename T>
+struct LPOracleResult {
+    T value{};
+    bool solved = false;
+
+    explicit operator bool() const noexcept {return solved;}
+};
+
 #endif

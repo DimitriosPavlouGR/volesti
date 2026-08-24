@@ -12,7 +12,7 @@
 #define ZPOLYORACLES_HPP
 
 #include <vector>
-#include <tuple>
+#include <utility>
 #include <cmath>
 #include "Highs.h"
 #include "lp_oracle_options.hpp"
@@ -29,11 +29,10 @@
 // @param V the generator matrix
 // @param q the point to test
 // @param opts optional callback to configure highs, see LPOracleOptions
-// @return the tuple (is_member, is_solved), where is_solved reports
-// whether the LP was solved successfully
+// @return whether q belongs to V, and whether the LP was solved successfully
 template <typename MT, typename Point>
-std::tuple<bool, bool> memLP_Zonotope(const MT& V, const Point& q,
-                                      LPOracleOptions const& opts = nullptr)
+LPOracleResult<bool> memLP_Zonotope(const MT& V, const Point& q,
+                                    LPOracleOptions const& opts = nullptr)
 {
     unsigned d = q.dimension();
     unsigned m = V.rows();
@@ -87,15 +86,14 @@ std::tuple<bool, bool> memLP_Zonotope(const MT& V, const Point& q,
 // @param p the line origin
 // @param v the line direction
 // @param opts optional callback to configure highs, see LPOracleOptions
-// @return (lambda_min, lambda_max, is_solved), where is_solved reports whether the LPs
-// were solved successfully
+// @return the pair (lambda_min, lambda_max), and whether the LP was solved successfully
 template <typename NT, typename MT, typename Point>
-std::tuple<NT, NT, bool> intersect_line_zono(MT const& V, Point const& p, Point const& v,
-                                             LPOracleOptions const& opts = nullptr)
+LPOracleResult<std::pair<NT, NT>> intersect_line_zono(MT const& V, Point const& p, Point const& v,
+                                                      LPOracleOptions const& opts = nullptr)
 {
     std::vector<double> conv_comb(V.rows());
-    auto [l1, ok1] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, true, opts);
-    auto [l2, ok2] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, true, opts);
-    return {l1, l2, ok1 && ok2};
+    auto l1 = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, true, opts);
+    auto l2 = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, true, opts);
+    return {{l1.value, l2.value}, l1.solved && l2.solved};
 }
 #endif

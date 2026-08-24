@@ -128,13 +128,12 @@ public:
     }
 
     bool is_feasible() {
-        bool empty;
         int k = P1.get_mat().rows() + P2.get_mat().rows();
         RNGType rng(k);
         rng.set_seed(seed);
-        empty = std::get<1>(PointInIntersection<VT>(P1.get_mat(), P2.get_mat(),
-                                GetDirection<Point>::apply(k, rng)));
-        return !empty;
+        auto res = point_in_intersection<VT>(P1.get_mat(), P2.get_mat(),
+                                             GetDirection<Point>::apply(k, rng));
+        return !res.value.second;
     }
 
     std::pair<Point,NT> ComputeInnerBall() {
@@ -153,8 +152,8 @@ public:
         while(num<d+1){
 
             direction = GetDirection<Point>::apply(k, rng);
-            p = std::get<0>(PointInIntersection<VT>(V1, V2, direction));
-
+            auto res = point_in_intersection<VT>(V1, V2, direction);
+            p = res.value.first;
             same = false;
             rvert = vertices.begin();
             for ( ;  rvert!=vertices.end(); ++rvert) {

@@ -34,9 +34,11 @@ void test_chebychev_cube(unsigned d, NT r) {
     VT b;
     make_cube(d, r, A, b);
 
-    auto [px, rx, ok] = ComputeChebychevBall<NT, Point>(A, b);
+    auto res = compute_chebychev_ball<NT, Point>(A, b);
+    Point px = res.value.first;
+    NT rx = res.value.second;
 
-    CHECK(ok);
+    CHECK(res.solved);
     CHECK(rx == doctest::Approx(r));
 
     for (unsigned i = 0; i < d; ++i)
@@ -51,9 +53,10 @@ void test_chebychev_empty_cube(unsigned d) {
     b(0) = NT(0);
     b(d) = NT(0);
 
-    auto [px, rx, ok] = ComputeChebychevBall<NT, Point>(A, b);
+    auto res = compute_chebychev_ball<NT, Point>(A, b);
+    NT rx = res.value.second;
 
-    CHECK(ok);
+    CHECK(res.solved);
     CHECK(rx == doctest::Approx(0.0));
 }
 
@@ -65,9 +68,9 @@ void test_chebychev_infeasible_cube(unsigned d) {
     b(0) = NT(-1);
     b(d) = NT(-1);
 
-    auto [px, rx, ok] = ComputeChebychevBall<NT, Point>(A, b);
+    auto res = compute_chebychev_ball<NT, Point>(A, b);
 
-    CHECK(!ok);
+    CHECK(!res.solved);
 }
 
 void test_identical_intersection() {
@@ -85,9 +88,11 @@ void test_identical_intersection() {
 
     direction.set_coord(0, NT(1));
 
-    auto [p, empty, ok] = PointInIntersection<VT>(V1, V1, direction);
+    auto res = point_in_intersection<VT>(V1, V1, direction);
+    Point p = res.value.first;
+    bool empty = res.value.second;
 
-    CHECK(ok);
+    CHECK(res.solved);
     CHECK(!empty);
     CHECK(p[0] == doctest::Approx(0.0));
     CHECK(p[1] == doctest::Approx(0.0));
@@ -115,9 +120,11 @@ void test_corner_intersection() {
 
     direction.set_coord(2, NT(1));
 
-    auto [p, empty, ok] = PointInIntersection<VT>(V1, V1, direction);
+    auto res = point_in_intersection<VT>(V1, V2, direction);
+    Point p = res.value.first;
+    bool empty = res.value.second;
 
-    CHECK(ok);
+    CHECK(res.solved);
     CHECK(!empty);
     CHECK(p[0] == doctest::Approx(2.0));
     CHECK(p[1] == doctest::Approx(2.0));
@@ -143,9 +150,10 @@ void test_empty_intersection() {
     for (unsigned i = 0; i < 10; ++i)
         direction.set_coord(i, NT(0.0));
 
-    auto [p, empty, ok] = PointInIntersection<VT>(V1, V2, direction);
+    auto res = point_in_intersection<VT>(V1, V2, direction);
+    bool empty = res.value.second;
 
-    CHECK(ok);
+    CHECK(res.solved);
     CHECK(empty);
 }
 

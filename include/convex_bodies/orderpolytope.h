@@ -221,11 +221,11 @@ public:
         normalize();
         std::pair<Point, NT> inner_ball;
         #ifndef DISABLE_HIGHS
-            auto [p, r, ok] = ComputeChebychevBall<NT, Point>(_A, b); // use HiGHS library
-            if (ok) {
-                inner_ball = {p, r};
+            auto ball = compute_chebychev_ball<NT, Point>(_A, b); // use HiGHS library
+            if (ball.solved) {
+                inner_ball = ball.value;
             } else {
-                inner_ball = {p, -1.0};
+                inner_ball = {ball.value.first, -1.0};
             }
         #else
 

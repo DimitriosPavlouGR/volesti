@@ -31,8 +31,8 @@
 // @return the center, the radius of the Chebychev ball, and whether the
 // method succeeded
 template<typename NT, typename Point, typename MT, typename VT>
-std::tuple<Point, NT, bool> ComputeChebychevBall(const MT& A, const VT& b, 
-                                                 LPOracleOptions const& opts = nullptr)
+LPOracleResult<std::pair<Point, NT>> compute_chebychev_ball(
+    const MT& A, const VT& b, LPOracleOptions const& opts = nullptr)
 {
     unsigned d = A.cols();
     unsigned m = A.rows();
@@ -77,7 +77,7 @@ std::tuple<Point, NT, bool> ComputeChebychevBall(const MT& A, const VT& b,
                   << std::endl;
         #endif
 
-        return {Point(d), NT(0), false}; // Returns default values
+        return {{Point(d), NT(0)}, false}; // Returns default values
     }
 
     const auto& sol = highs.getSolution().col_value;
@@ -89,7 +89,7 @@ std::tuple<Point, NT, bool> ComputeChebychevBall(const MT& A, const VT& b,
     Point x(d, center.begin(), center.end());
     NT r = (NT)highs.getObjectiveValue();
 
-    return {x, r, true};
+    return {{x, r}, true};
 }
 
 // Finds a point in the intersection of the two V-Polytopes, given by the 
@@ -108,8 +108,8 @@ std::tuple<Point, NT, bool> ComputeChebychevBall(const MT& A, const VT& b,
 // @return a point in the intersection, whether the intersection is empty,
 // and whether the function succeeded
 template<typename VT, typename MT, typename Point>
-std::tuple<Point, bool, bool> PointInIntersection(MT V1, MT V2, Point direction,
-                                                  LPOracleOptions const& opts = nullptr) 
+LPOracleResult<std::pair<Point, bool>> point_in_intersection(
+    MT V1, MT V2, Point direction, LPOracleOptions const& opts = nullptr) 
 {
     typedef typename Point::FT NT;
 
@@ -162,7 +162,7 @@ std::tuple<Point, bool, bool> PointInIntersection(MT V1, MT V2, Point direction,
     highs.run();
 
     if (highs.getModelStatus() == HighsModelStatus::kInfeasible) { // This means an empty intersection
-        return {Point(d), true, true}; 
+        return {{Point(d), true}, true}; 
     } else if (highs.getModelStatus() != HighsModelStatus::kOptimal) { // This means the LP failed
         #ifdef VOLESTI_DEBUG
         std::cout << "Could not solve the Linear Program for VPolytope intersection "
@@ -171,7 +171,7 @@ std::tuple<Point, bool, bool> PointInIntersection(MT V1, MT V2, Point direction,
                   << std::endl;
         #endif
 
-        return {Point(d), false, false};
+        return {{Point(d), false}, false};
     }
 
     // For the solution we use lambda, mu also works.
@@ -181,6 +181,6 @@ std::tuple<Point, bool, bool> PointInIntersection(MT V1, MT V2, Point direction,
         lambda(i) = (NT)sol[i];
     
     p = V1.transpose()*lambda;
-    return {p, false, true};
+    return {{p, false}, true};
 }
 #endif

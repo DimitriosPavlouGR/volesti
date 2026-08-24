@@ -37,10 +37,10 @@ void test_membership() {
     std::vector<NT> row(3);
     std::vector<int> colno(3);
 
-    CHECK(std::get<0>(memLP_Zonotope(Z, Point(2, {0.0, 0.0}))));
-    CHECK(std::get<0>(memLP_Zonotope(Z, Point(2, {1.0, 0.5}))));
-    CHECK(!std::get<0>(memLP_Zonotope(Z, Point(2, {3.0, 0.0}))));
-    CHECK(!std::get<0>(memLP_Zonotope(Z, Point(2, {0.0, 3.0}))));
+    CHECK(memLP_Zonotope(Z, Point(2, {0.0, 0.0})).value);
+    CHECK(memLP_Zonotope(Z, Point(2, {1.0, 0.5})).value);
+    CHECK(!memLP_Zonotope(Z, Point(2, {3.0, 0.0})).value);
+    CHECK(!memLP_Zonotope(Z, Point(2, {0.0, 3.0})).value);
 }
 
 void test_line_intersection_vpoly() {
@@ -53,11 +53,11 @@ void test_line_intersection_vpoly() {
     Point v(2, {1.0, 0.0});
 
     // Single point tests.
-    auto [l1, l2, ok] = intersect_line_zono<NT>(Z, p, v);
+    auto res = intersect_line_zono<NT>(Z, p, v);
     
-    CHECK(ok);
-    CHECK(l1 == doctest::Approx(1.0));
-    CHECK(l2 == doctest::Approx(-3.0));
+    CHECK(res.solved);
+    CHECK(res.value.first == doctest::Approx(1.0));
+    CHECK(res.value.second == doctest::Approx(-3.0));
 }
 
 void test_line_intersection_zpoly() {
@@ -75,14 +75,14 @@ void test_line_intersection_zpoly() {
     Point v(2, {1.0, 0.0});
 
     // Single point tests.
-    auto [max_l, ok1] = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), true, true);
+    auto res1 = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), true, true);
     
-    auto [min_l, ok2] = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), false, true);
+    auto res2 = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), false, true);
 
-    CHECK(ok1);
-    CHECK(ok2);
-    CHECK(max_l == doctest::Approx(-2.0));
-    CHECK(min_l == doctest::Approx(2.0));
+    CHECK(res1.solved);
+    CHECK(res2.solved);
+    CHECK(res1.value == doctest::Approx(-2.0));
+    CHECK(res2.value == doctest::Approx(2.0));
 }
 
 TEST_CASE("test_membership") {

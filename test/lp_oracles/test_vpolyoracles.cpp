@@ -13,7 +13,7 @@
 #include "cartesian_geom/cartesian_kernel.h"
 #include "lp_oracles/vpolyoracles.hpp"
 #include <vector>
-#include <tuple>
+#include <utility>
 
 typedef double NT;
 typedef Cartesian<NT> Kernel;
@@ -30,10 +30,10 @@ void test_membership() {
          3, 4,
          0, 3;
 
-    CHECK(std::get<0>(memLP_Vpoly(V, Point(2, {0.0, 0.0}))));
-    CHECK(std::get<0>(memLP_Vpoly(V, Point(2, {1.0, 0.5}))));
-    CHECK(!std::get<0>(memLP_Vpoly(V, Point(2, {0.0, 5.0}))));
-    CHECK(!std::get<0>(memLP_Vpoly(V, Point(2, {-1.0, -1.0}))));
+    CHECK(memLP_Vpoly(V, Point(2, {0.0, 0.0})).value);
+    CHECK(memLP_Vpoly(V, Point(2, {1.0, 0.5})).value);
+    CHECK(!memLP_Vpoly(V, Point(2, {0.0, 5.0})).value);
+    CHECK(!memLP_Vpoly(V, Point(2, {-1.0, -1.0})).value);
 }
 
 void test_line_intersection_vpoly() {
@@ -50,20 +50,20 @@ void test_line_intersection_vpoly() {
     Point v(2, {1.0, 0.0});
 
     // Single point tests.
-    auto [max_l, ok1] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, false);
-    auto [min_l, ok2] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, false);
+    auto max_res = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, false);
+    auto min_res = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, false);
     
-    CHECK(ok1);
-    CHECK(ok2);
-    CHECK(max_l == doctest::Approx(-2.0));
-    CHECK(min_l == doctest::Approx(2.5));
+    CHECK(max_res.solved);
+    CHECK(min_res.solved);
+    CHECK(max_res.value == doctest::Approx(-2.0));
+    CHECK(min_res.value == doctest::Approx(2.5));
 
     // Two points tests.
-    auto [min_l2, max_l2, ok3] = intersect_double_line_Vpoly<NT>(V, p, v);
+    auto res = intersect_double_line_Vpoly<NT>(V, p, v);
 
-    CHECK(ok3);
-    CHECK(min_l2 == doctest::Approx(2.5));
-    CHECK(max_l2 == doctest::Approx(-2.0));
+    CHECK(res.solved);
+    CHECK(res.value.first == doctest::Approx(2.5));
+    CHECK(res.value.second == doctest::Approx(-2.0));
 }
 
 void test_line_intersection_zpoly() {
@@ -78,13 +78,13 @@ void test_line_intersection_zpoly() {
     Point p(2, {0.0, 0.0});
     Point v(2, {1.0, 0.0});
 
-    auto [max_l, ok1] = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), true, true);
-    auto [min_l, ok2] = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), false, true);
+    auto max_res = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), true, true);
+    auto min_res = intersect_line_Vpoly<NT>(Z, p, v, conv_comb.data(), false, true);
 
-    CHECK(ok1);
-    CHECK(ok2);
-    CHECK(max_l == doctest::Approx(-2.0));
-    CHECK(min_l == doctest::Approx(2.0));
+    CHECK(max_res.solved);
+    CHECK(min_res.solved);
+    CHECK(max_res.value == doctest::Approx(-2.0));
+    CHECK(min_res.value == doctest::Approx(2.0));
 }
 
 TEST_CASE("test_membership") {

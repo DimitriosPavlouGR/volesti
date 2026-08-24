@@ -12,7 +12,7 @@
 #define VPOLYORACLES_HPP
 
 #include <vector>
-#include <tuple>
+#include <utility>
 #include <cmath>
 #include "Highs.h"
 #include "lp_oracle_options.hpp"
@@ -24,16 +24,13 @@
 // is positive, and q is inside the hull when it is not.
 // @tparam MT the matrix type of V
 // @tparam Point the point type
-// @tparam NT the number type
 // @param V the vertex matrix, one vertex per row
 // @param q the point to test
 // @param opts optional callback to configure highs, see LPOracleOptions
-// @return the bool tuple (is_member, is_solved), where is_member says
-// whether q belongs to V and is_solved reports whether the lp was solved
-// successfully
+// @return whether q belongs to V, and whether the lp was solved successfully
 template <typename MT, typename Point>
-std::tuple<bool, bool> memLP_Vpoly(const MT& V, const Point& q,
-                                   LPOracleOptions const& opts = nullptr)
+LPOracleResult<bool> memLP_Vpoly(const MT& V, const Point& q,
+                                 LPOracleOptions const& opts = nullptr)
 {
     unsigned d = q.dimension();
     unsigned m = V.rows();
@@ -103,12 +100,11 @@ std::tuple<bool, bool> memLP_Vpoly(const MT& V, const Point& q,
 // @param maxi if true the largest lambda is computed, otherwise the smallest
 // @param zonotope true when V describes a zonotope
 // @param opts optional callback to configure highs, see LPOracleOptions
-// @return the tuple (lambda, is_solved), where is_solved reports whether the LP was
-// solved successfully.
+// @return lambda, and whether the LP was solved successfully
 template <typename NT, typename MT, typename Point>
-std::tuple<NT, bool> intersect_line_Vpoly(MT const& V, Point const& p, Point const& v,
-                                          double *conv_comb, bool maxi, bool zonotope,
-                                          LPOracleOptions const& opts = nullptr)
+LPOracleResult<NT> intersect_line_Vpoly(MT const& V, Point const& p, Point const& v,
+                                        double *conv_comb, bool maxi, bool zonotope,
+                                        LPOracleOptions const& opts = nullptr)
 {
     unsigned d = v.dimension();
     unsigned m = V.rows();
@@ -170,7 +166,7 @@ std::tuple<NT, bool> intersect_line_Vpoly(MT const& V, Point const& p, Point con
 
 // Computes both intersections of the line p + l v with a V-Polytope.
 //
-// The function makes two calls to intersect_line_Vpoly to cmpute the two points.
+// The function makes two calls to intersect_line_Vpoly to compute the two points.
 // @tparam NT the number type
 // @tparam MT the matrix type of V
 // @tparam Point the point type
@@ -178,15 +174,14 @@ std::tuple<NT, bool> intersect_line_Vpoly(MT const& V, Point const& p, Point con
 // @param p the line origin
 // @param v the line direction
 // @param opts optional callback to configure highs, see LPOracleOptions
-// @return the tuple (lambda_min, lambda_max, is_solved), where is solved reports
-// whether the LP was solved successfully.
+// @return the pair (lambda_min, lambda_max), and whether the LP was solved successfully
 template <typename NT, typename MT, typename Point>
-std::tuple<NT, NT, bool> intersect_double_line_Vpoly(MT const& V, Point const& p, Point const& v,
-                                                     LPOracleOptions const& opts = nullptr)
+LPOracleResult<std::pair<NT, NT>> intersect_double_line_Vpoly(MT const& V, Point const& p, Point const& v,
+                                                              LPOracleOptions const& opts = nullptr)
 {
     std::vector<double> conv_comb(V.rows());
-    auto [l1, ok1] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, false, opts);
-    auto [l2, ok2] = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, false, opts);
-    return {l1, l2, ok1 && ok2};
+    auto l1 = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), false, false, opts);
+    auto l2 = intersect_line_Vpoly<NT>(V, p, v, conv_comb.data(), true, false, opts);
+    return {{l1.value, l2.value}, l1.solved && l2.solved};
 }
 #endif

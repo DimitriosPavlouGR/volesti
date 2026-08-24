@@ -13,8 +13,8 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "preprocess/metabolic/exhaustive_simplification.hpp"
-#include "preprocess/metabolic/clarkson_simplification.hpp"
+#include "preprocess/metabolic/simplification_exhaustive.hpp"
+#include "preprocess/metabolic/simplification_clarkson.hpp"
 
 typedef double NT;
 typedef Cartesian<NT> Kernel;
@@ -25,28 +25,38 @@ typedef typename Polytope::VT VT;
 static NT const INF = std::numeric_limits<NT>::infinity();
 
 struct Exhaustive {
-    static exhaustive_simplification::Result<Point> run(Polytope const& P, 
-                                                        bool fix_dimensions)
+    static std::pair<Polytope, bool> run(Polytope const& P, 
+                                         bool fix_dimensions)
     {
-        exhaustive_simplification::Config config;
+        ExhaustiveConfig config;
         config.fix_dimensions = fix_dimensions;
-        return exhaustive_simplification::simplify(P, config);
+        ExhaustiveSimplifier<Point> simplifier(P, config);
+        return simplifier.simplify();
     }
 
-    static char const* name() {return "exhaustive";}
+    static std::string name() {return "exhaustive";}
 };
 
 struct Clarkson {
-    static clarkson_simplification::Result<Point> run(Polytope const& P, 
-                                                      bool fix_dimensions)
+    static std::pair<Polytope, bool> run(Polytope const& P, 
+                                         bool fix_dimensions)
     {
-        clarkson_simplification::Config config;
+        ClarksonConfig config;
         config.fix_dimensions = fix_dimensions;
-        return clarkson_simplification::simplify(P, config);
+        ClarksonSimplifier<Point> simplifier(P, config);
+        return simplifier.simplify();
     }
 
-    static char const* name() {return "clarkson";}
+    static std::string name() {return "clarkson";}
 };
+
+unsigned bounds_relaxed(Polytope const& Po, Polytope const& Ps) {
+    return Po.getNumFiniteBounds()-Ps.getNumFiniteBounds();
+}
+
+unsigned dims_fixed(Polytope const& Po, Polytope const& Ps) {
+    return Ps.getNumEqualities()-Po.getNumEqualities();
+}
 
 template <typename Simplifier>
 void test_cube_no_change(unsigned d) 
@@ -54,11 +64,11 @@ void test_cube_no_change(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope::cube(d);
-    auto result = Simplifier::run(P1, false);
-    Polytope P2 = result.P;
+    auto [P2, success] = Simplifier::run(P1, false);
 
-    CHECK(result.bounds_relaxed == 0);
-    CHECK(result.dims_fixed == 0);
+    REQUIRE(success);
+    CHECK(bounds_relaxed(P1, P2) == 0);
+    CHECK(dims_fixed(P1, P2) == 0);
     CHECK(P2.getEqualities().isApprox(P1.getEqualities()));
     CHECK(P2.getLowerBounds() == P1.getLowerBounds());
     CHECK(P2.getUpperBounds() == P1.getUpperBounds());
@@ -95,12 +105,13 @@ void test_cube_relaxed_bounds(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    auto result = Simplifier::run(P1, false);
-    Polytope P2 = result.P;
+    auto [P2, success] = Simplifier::run(P1, false);
+
+    REQUIRE(success);
 
     // Checks the simplification statistics.
-    CHECK(result.bounds_relaxed == 2*d);
-    CHECK(result.dims_fixed == 0);
+    CHECK(bounds_relaxed(P1, P2) == 2*d);
+    CHECK(dims_fixed(P1, P2) == 0);
 
     // Checks that equalities were untouched.
     CHECK(P2.getEqualities().isApprox(P1.getEqualities()));
@@ -121,12 +132,13 @@ void test_simplex_relaxed_bounds(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope::simplex(d);
-    auto result = Simplifier::run(P1, false);
-    Polytope P2 = result.P;
+    auto [P2, success] = Simplifier::run(P1, false);
+
+    REQUIRE(success);
 
     // Checks statistics.
-    CHECK(result.bounds_relaxed == d);
-    CHECK(result.dims_fixed == 0);
+    CHECK(bounds_relaxed(P1, P2) == d);
+    CHECK(dims_fixed(P1, P2) == 0);
 
     // Checks every upper bound is infinity.
     CHECK((P2.getUpperBounds().array() == INF).all());
@@ -160,12 +172,13 @@ void test_cube_degenerate_dimensions(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    auto result = Simplifier::run(P1, true);
-    Polytope P2 = result.P;
+    auto [P2, success] = Simplifier::run(P1, true);
+
+    REQUIRE(success);
 
     // Checks statistics.
-    CHECK(result.bounds_relaxed == 2*d);
-    CHECK(result.dims_fixed == d);
+    CHECK(bounds_relaxed(P1, P2) == 2*d);
+    CHECK(dims_fixed(P1, P2) == d);
 
     // Checks that the pinned constraints were added to A_eq.
     CHECK(P2.getNumEqualities() == d);

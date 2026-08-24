@@ -15,8 +15,8 @@
 #include "doctest.h"
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
-#include "preprocess/metabolic/exhaustive_simplification.hpp"
-#include "preprocess/metabolic/clarkson_simplification.hpp"
+#include "preprocess/metabolic/simplification_exhaustive.hpp"
+#include "preprocess/metabolic/simplification_clarkson.hpp"
 #include "preprocess/metabolic/transformation.hpp"
 #include "random_walks/random_walks.hpp"
 #include "volume/volume_cooling_balls.hpp"
@@ -34,27 +34,29 @@ typedef typename Polytope::VT VT;
 typedef BoostRandomNumberGenerator<boost::mt19937, double> RNG;
 
 struct Exhaustive {
-    static exhaustive_simplification::Result<Point> run(Polytope const& P, 
-                                                        bool fix_dimensions)
+    static std::pair<Polytope, bool> run(Polytope const& P, 
+                                         bool fix_dimensions)
     {
-        exhaustive_simplification::Config config;
+        ExhaustiveConfig config;
         config.fix_dimensions = fix_dimensions;
-        return exhaustive_simplification::simplify(P, config);
+        ExhaustiveSimplifier<Point> simplifier(P, config);
+        return simplifier.simplify();
     }
 
-    static char const* name() {return "exhaustive";}
+    static std::string name() {return "exhaustive";}
 };
 
 struct Clarkson {
-    static clarkson_simplification::Result<Point> run(Polytope const& P, 
-                                                      bool fix_dimensions)
+    static std::pair<Polytope, bool> run(Polytope const& P, 
+                                         bool fix_dimensions)
     {
-        clarkson_simplification::Config config;
+        ClarksonConfig config;
         config.fix_dimensions = fix_dimensions;
-        return clarkson_simplification::simplify(P, config);
+        ClarksonSimplifier<Point> simplifier(P, config);
+        return simplifier.simplify();
     }
 
-    static char const* name() {return "clarkson";}
+    static std::string name() {return "clarkson";}
 };
 
 NT compute_median_volume(HPolytope<Point> & HP,
@@ -135,8 +137,9 @@ void test_cube_transformation(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope(m, A_eq, b_l, b_u, b_eq);
-    auto res = Simplifier::run(P1, true);
-    Polytope P2 = res.P;
+    auto [P2, ok] = Simplifier::run(P1, true);
+    
+    REQUIRE(ok);
 
     auto trs_res = transform(P2);
     HPolytope<Point> HP = std::get<0>(trs_res);
@@ -157,8 +160,9 @@ void test_simplex_transformation(unsigned d)
     INFO("simplifier: " << Simplifier::name());
 
     Polytope P1 = Polytope::simplex(d);
-    auto result = Simplifier::run(P1, false);
-    Polytope P2 = result.P;
+    auto [P2, ok] = Simplifier::run(P1, true);
+    
+    REQUIRE(ok);
 
     auto trs_res = transform(P2);
     HPolytope<Point> HP = std::get<0>(trs_res);

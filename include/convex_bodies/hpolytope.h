@@ -158,10 +158,9 @@ public:
                 
                 std::cerr << "Failed to compute max inscribed ball, trying to use HiGHS" << std::endl;
                 #ifndef DISABLE_HIGHS
-                    auto [center, radius, ok] = ComputeChebychevBall<NT, Point>(A, b); // use highs library
-                    if (ok) {
-                        _inner_ball.first = center;
-                        _inner_ball.second = radius;
+                    auto ball = compute_chebychev_ball<NT, Point>(A, b); // use highs library
+                    if (ball.solved) {
+                        _inner_ball = ball.value;
                     } else {
                         std::cerr << "Failed to compute the chebychev ball" << std::endl;
                         has_ball = false;

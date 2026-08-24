@@ -82,17 +82,19 @@ struct MaxBoundScaling {
     }
 };
 
-// Scales every reaction by its largest finite bound in absolute value,
-// which sends that bound to +-1, and every metabolite row by its largest
-// coefficieint once the reaction factors are in place, which sends that coeffecient
-// to +-1.
+// Geometric mean scaling of A_eq, following the gmscale
 struct GMScaling {
     // Number of alternating column/row passes.
     unsigned passes = 5;
 
+    // Convergence tolerance. If a pass fails to improve the max/min ratio by this factor
+    // stops the iteration.
     double scltol = 0.9;
 
+    // Damping of the smallest magnitude in a row or column.
     double damp = 1e-4;
+
+    // Scale factors below this are treated as degenerate and reset to one.
     double tol = 1e-12;
 
     // Sets the scaling factors for the polytope.

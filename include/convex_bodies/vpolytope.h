@@ -394,8 +394,8 @@ public:
         for (unsigned int i = 0; i < _d; ++i) {
             v.set_to_origin();
             v.set_coord(i, 1.0);
-            auto [l1, l2, ok] = intersect_double_line_Vpoly<NT>(V, center, v);
-            min_plus = std::min(l1, -1.0*l2);
+            auto res = intersect_double_line_Vpoly<NT>(V, center, v);
+            min_plus = std::min(res.value.first, -1.0*res.value.second);
             if (min_plus < radius) radius = min_plus;
         }
 
@@ -407,7 +407,7 @@ public:
 
     // check if point p belongs to the convex hull of V-Polytope P
     int is_in(const Point &p, NT tol=NT(0)) const {
-        if (std::get<0>(memLP_Vpoly(V, p))){
+        if (memLP_Vpoly(V, p).value){
             return -1;
         }
         return 0;
@@ -417,8 +417,8 @@ public:
     // compute intersection point of ray starting from r and pointing to v
     // with the V-polytope
     std::pair<NT,NT> line_intersect(const Point &r, const Point &v) const {
-        auto [l1, l2, ok] = intersect_double_line_Vpoly<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_double_line_Vpoly<NT>(V, r, v);
+        return res.value;
     }
 
 
@@ -426,22 +426,22 @@ public:
     // with the V-polytope
     std::pair<NT,NT> line_intersect(const Point &r, const Point &v, const VT &Ar,
             const VT &Av) const {
-        auto [l1, l2, ok] = intersect_double_line_Vpoly<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_double_line_Vpoly<NT>(V, r, v);
+        return res.value;
     }
 
     // compute intersection point of ray starting from r and pointing to v
     // with the V-polytope
     std::pair<NT,NT> line_intersect(const Point &r, const Point &v, const VT &Ar,
                                     const VT &Av, const NT &lambda_prev) const {
-        auto [l1, l2, ok] = intersect_double_line_Vpoly<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_double_line_Vpoly<NT>(V, r, v);
+        return res.value;
     }
 
 
     std::pair<NT, int> line_positive_intersect(const Point &r, const Point &v) const {
         return std::pair<NT, int> (
-            std::get<0>(intersect_line_Vpoly<NT>(V, r, v, conv_comb, false, false)), 1);
+            intersect_line_Vpoly<NT>(V, r, v, conv_comb, false, false).value, 1);
     }
 
     std::pair<NT, int> line_positive_intersect(const Point &r, const Point &v, const VT &Ar,
@@ -498,8 +498,8 @@ public:
                                           const VT &lamdas) const {
         Point v(_d);
         v.set_coord(rand_coord, 1.0);
-        auto [l1, l2, ok] = intersect_double_line_Vpoly<NT>(V, r, v);
-        return {l1, l2};
+        auto res = intersect_double_line_Vpoly<NT>(V, r, v);
+        return res.value;
     }
 
 

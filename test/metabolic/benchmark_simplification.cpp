@@ -11,8 +11,9 @@
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
 #include "io/bigg_parser.hpp"
-#include "preprocess/metabolic/exhaustive_simplification.hpp"
-#include "preprocess/metabolic/clarkson_simplification.hpp"
+#include "preprocess/metabolic/simplification_exhaustive.hpp"
+#include "preprocess/metabolic/simplification_clarkson.hpp"
+#include "lp_oracles/metabolic_polyoracles.hpp"
 #include <algorithm>
 #include <iostream>
 #include <chrono>
@@ -25,29 +26,48 @@ typedef Cartesian<NT> Kernel;
 typedef typename Kernel::Point Point;
 typedef MetabolicPolytope<Point> Polytope;
 
-// Prints a row of the benchmark table.
-// @param method the name of the method
-// @param bounds_relaxed the number of bounds relaxed
-// @param dims_fixed the number of dimensions fixed
-// @param success whether the simplification was successful
-// @param elapsed_s the time taken in seconds
-void print_row(char const* method,
-               unsigned bounds_relaxed,
-               unsigned dims_fixed,
-               bool success,
+unsigned bounds_relaxed(Polytope const& Po, Polytope const& Ps) {
+    return Po.getNumFiniteBounds()-Ps.getNumFiniteBounds();
+}
+
+unsigned dims_fixed(Polytope const& Po, Polytope const& Ps) {
+    return Ps.getNumEqualities()-Po.getNumEqualities();
+}
+
+void print_row(std::string method,
+               Polytope const& Po,
+               Polytope const& Ps,
+               std::string status,
                double elapsed_s)
 {
     std::cout << " " << std::left << std::setw(12) << method
-              << std::right << std::setw(8) << bounds_relaxed
-              << std::setw(8) << dims_fixed
-              << std::setw(10) << (success ? "OK" : "FAIL")
+              << std::right << std::setw(8) << bounds_relaxed(Po, Ps)
+              << std::setw(8) << dims_fixed(Po, Ps)
+              << std::setw(10) << status
               << std::setw(10) << std::fixed << std::setprecision(3)
               << elapsed_s << "s" << std::endl;
 }
 
-// Runs both simplification methods on the same model and reports the results.
-// @param model the path to the JSON file
-// @param dimension_fixing whether degenerate dimensions should be fixed
+template <typename Simplifier, typename Config>
+void run_method(std::string method, Polytope const& P, bool dimension_fixing) {
+    Config config;
+    config.fix_dimensions = dimension_fixing;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    Simplifier simplifier(P, config);
+    auto [Ps, success] = simplifier.simplify();
+    auto end = std::chrono::high_resolution_clock::now();
+    auto elapsed_s = std::chrono::duration<double>(end-start).count();
+
+    auto equal_orac = are_equal(P, Ps);
+
+    std::string status = equal_orac.value ? "OK"
+                       : !equal_orac.solved ? "UNVALIDATED"
+                                            : "NOT EQUAL";
+
+    print_row(method, P, Ps, status, elapsed_s);
+}
+
 void benchmark(std::string const& model, bool dimension_fixing) {
     Polytope P = parse_from_json<Point>(model);
 
@@ -65,26 +85,11 @@ void benchmark(std::string const& model, bool dimension_fixing) {
               << std::setw(10) << "status"
               << std::setw(11) << "time" << std::endl;
 
+    run_method<ExhaustiveSimplifier<Point>, ExhaustiveConfig>(
+        "exhaustive", P, dimension_fixing);
     
-    exhaustive_simplification::Config exhaustive_config;
-    exhaustive_config.fix_dimensions = dimension_fixing;
-    
-    auto ex_start = std::chrono::high_resolution_clock::now();
-    auto ex_result = exhaustive_simplification::simplify(P, exhaustive_config);
-    auto ex_end = std::chrono::high_resolution_clock::now();
-    double ex_elapsed_s = std::chrono::duration<double>(ex_end-ex_start).count();
-
-    print_row("exhaustive", ex_result.bounds_relaxed, ex_result.dims_fixed, ex_result.success, ex_elapsed_s);
-        
-    clarkson_simplification::Config clarkson_config;
-    clarkson_config.fix_dimensions = dimension_fixing;
-
-    auto cl_start = std::chrono::high_resolution_clock::now();
-    auto cl_result = clarkson_simplification::simplify(P, clarkson_config);
-    auto cl_end = std::chrono::high_resolution_clock::now();
-    double cl_elapsed_s = std::chrono::duration<double>(cl_end-cl_start).count();
-    
-    print_row("clarkson", cl_result.bounds_relaxed, cl_result.dims_fixed, cl_result.success, cl_elapsed_s);
+    run_method<ClarksonSimplifier<Point>, ClarksonConfig>(
+        "clarkson", P, dimension_fixing);
 }
 
 int main() {
@@ -97,7 +102,7 @@ int main() {
     std::sort(models.begin(), models.end());
 
     for (auto const& model : models) {
-        benchmark(model.string(), false); // without dimension fixing
+        // benchmark(model.string(), false); // without dimension fixing
         benchmark(model.string(), true);  // with dimension fixing
     }
 

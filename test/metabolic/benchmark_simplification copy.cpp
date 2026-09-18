@@ -11,12 +11,8 @@
 #include "Eigen/Eigen"
 #include "cartesian_geom/cartesian_kernel.h"
 #include "io/bigg_parser.hpp"
-#include "io/simplification_exporter.hpp"
 #include "preprocess/metabolic/simplification_exhaustive.hpp"
 #include "preprocess/metabolic/simplification_clarkson.hpp"
-#include "preprocess/metabolic/transformation.hpp"
-#include "preprocess/max_inscribed_ellipsoid.hpp"
-#include "preprocess/feasible_point.hpp"
 #include "lp_oracles/metabolic_polyoracles.hpp"
 #include <algorithm>
 #include <iostream>
@@ -30,11 +26,6 @@ typedef Cartesian<NT> Kernel;
 typedef typename Kernel::Point Point;
 typedef MetabolicPolytope<Point> Polytope;
 
-typedef Eigen::Matrix<NT, Eigen::Dynamic, 1> DenseVT;
-typedef Eigen::Matrix<NT, Eigen::Dynamic, Eigen::Dynamic> DenseMT;
-
-static std::filesystem::path const EXPORT_DIR = "simplified_bigg";
-
 unsigned bounds_relaxed(Polytope const& Po, Polytope const& Ps) {
     return Po.getNumFiniteBounds()-Ps.getNumFiniteBounds();
 }
@@ -43,60 +34,10 @@ unsigned dims_fixed(Polytope const& Po, Polytope const& Ps) {
     return Ps.getNumEqualities()-Po.getNumEqualities();
 }
 
-/*
-NT measure_skinniness(HPolytope<Point> & HP) {
-    HP.normalize();
-    DenseMT A_in = HP.get_mat();
-    DenseVT b_in = HP.get_vec();
-
-    auto ball = HP.ComputeInnerBall();
-    DenseVT x0 = ball.first.getCoefficients();
-    std::cerr << "inner_ball_radius=" << ball.second << '\n';
-    DenseVT slack = b_in-A_in*x0;
-    std::cerr << "rows=" << A_in.rows() << " cols=" << A_in.cols()
-              << " min_slack=" << slack.minCoeff() << '\n';
-    if (slack.minCoeff() <= NT(0)) {
-        std::cerr << "x0 is not strictly interior\n";
-        return NT(-1);
-    }
-
-    JohnEllipsoidParams<NT> params;
-    params.maxiter = 2000;
-    std::cerr << "maxiter=" << params.maxiter
-              << " tol=" << params.tol << " reg=" << params.reg << '\n';
-
-    DenseMT E;
-    DenseVT center;
-    bool converged = false;
-    std::tie(E, center, converged) =
-        max_inscribed_ellipsoid<DenseMT, DenseMT, DenseVT, NT>(A_in, b_in, x0, params);
-
-    if (!converged) {
-        std::cerr << "solver did not converge\n";
-        return NT(-1);
-    }
-
-    E = (E+E.transpose())/NT(2);
-    Eigen::SelfAdjointEigenSolver<DenseMT> es(E);
-    if (es.info() != Eigen::Success) {
-        std::cerr << "eigensolver failed\n";
-        return NT(-1);
-    }
-
-    NT lam_min = es.eigenvalues()(0);
-    NT lam_max = es.eigenvalues()(es.eigenvalues().size()-1);
-    std::cerr << "lam_min=" << lam_min << " lam_max=" << lam_max << '\n';
-    if (lam_min <= NT(0)) return NT(-1);
-
-    return std::sqrt(lam_max/lam_min);
-}
-*/
-
 void print_row(std::string method,
                Polytope const& Po,
                Polytope const& Ps,
                std::string status,
-               NT skinniness,
                double elapsed_s)
 {
     std::cout << " " << std::left << std::setw(12) << method
@@ -104,19 +45,11 @@ void print_row(std::string method,
               << std::setw(8) << dims_fixed(Po, Ps)
               << std::setw(10) << status
               << std::setw(10) << std::fixed << std::setprecision(3)
-              << elapsed_s << "s";
-
-    std::cout << std::setw(14);
-    if (skinniness < NT(0)) {
-        std::cout << "n/a";
-    } else {
-        std::cout << std::scientific << std::setprecision(5) << skinniness;
-    } 
-    std::cout << std::endl;
+              << elapsed_s << "s" << std::endl;
 }
 
 template <typename Simplifier, typename Config>
-void run_method(std::string method, std::string const& name, Polytope const& P, bool dimension_fixing) {
+void run_method(std::string method, Polytope const& P, bool dimension_fixing) {
     Config config;
     config.fix_dimensions = dimension_fixing;
     config.fallback_on_interior_failure = false;
@@ -134,24 +67,11 @@ void run_method(std::string method, std::string const& name, Polytope const& P, 
     //                                        : "NOT EQUAL";
     std::string status = success ? "OK" : "FAILED";
 
-    NT skinniness = NT(-1);
-    if (success) {
-        auto trans_result = transform(Ps);
-        HPolytope<Point> HP = std::get<0>(trans_result);
-        DenseVT shift = std::get<1>(trans_result);
-        DenseMT N = std::get<2>(trans_result);
-        std::filesystem::create_directories(EXPORT_DIR);
-        std::filesystem::path out = EXPORT_DIR/(name+"_"+method+".json");
-        export_to_json(out.string(), name, P, Ps, HP, N, shift);
-        skinniness = skinniness;
-    }
-
-    print_row(method, P, Ps, status, skinniness, elapsed_s);
+    print_row(method, P, Ps, status, elapsed_s);
 }
 
 void benchmark(std::string const& model, bool dimension_fixing) {
     Polytope P = parse_from_json<Point>(model);
-    std::string name = std::filesystem::path(model).stem().string();
 
     std::cout << "\n --- " << std::filesystem::path(model).stem().string()
               << " (n = " << P.getDimension()
@@ -171,7 +91,7 @@ void benchmark(std::string const& model, bool dimension_fixing) {
     //    "exhaustive", P, dimension_fixing);
     
     run_method<ClarksonSimplifier<Point>, ClarksonConfig>(
-        "clarkson", name, P, dimension_fixing);
+        "clarkson", P, dimension_fixing);
 }
 
 int main() {

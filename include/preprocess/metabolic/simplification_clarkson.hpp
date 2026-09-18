@@ -14,18 +14,18 @@
 #include <iostream>
 #include <array>
 #include <vector>
-#include <set>
 #include <queue>
 #include <utility>
 #include <random>
-#include <iterator>
 #include <cmath>
 #include <limits>
 #include <Eigen/Eigen>
 #include "convex_bodies/metabolic_polytope.hpp"
 #include "preprocess/metabolic/simplification_exhaustive.hpp"
+#include "preprocess/metabolic/presolve.hpp"
 #include "common.hpp"
 #include "Highs.h"
+#include <chrono>
 
 // Configuration parameters controlling the simplification process.
 struct ClarksonConfig : ExhaustiveConfig {
@@ -39,10 +39,19 @@ struct ClarksonConfig : ExhaustiveConfig {
     double relaxation_gap = 1.0;
 
     // The bound on the number of failed iteration's in clarkson.
-    unsigned failed_iter_count = 50;
+    unsigned failed_iter_count = 2;
+
+    // Tracks if presolve should be used, turned on by default.
+    bool presolve = true;
 
     // The seed based on which clarkson picks inequalities.
     unsigned clarkson_seed = 0;
+
+    // Tracks if fallback should be used when Clarkson fails to find an interior point.
+    bool fallback_on_interior_failure = true;
+
+    // This the observation tolerance.
+    double observe_tolerance = 1e-6;
 };
 
 // Simplifies a MetabolicPolytope using Clarkson's algorithm. The model starts with
@@ -55,6 +64,11 @@ struct ClarksonConfig : ExhaustiveConfig {
 template <typename Point>
 class ClarksonSimplifier {
     public:
+        // Types.
+        typedef typename MetabolicPolytope<Point>::MT MT;
+        typedef typename MetabolicPolytope<Point>::VT VT;
+        typedef typename MetabolicPolytope<Point>::NT NT;
+
         // Builds the LP model of the given polytope.
         // @param P_in the polytope to simplify
         // @param config_in the simplification configuration
@@ -72,13 +86,37 @@ class ClarksonSimplifier {
             MetabolicPolytope<Point> Ps = P;
 
             if (config.fix_dimensions) {
-                Ps = fix_degenerate_dimensions();
+                auto t0 = std::chrono::steady_clock::now();
+                this->presolve();
+                auto t1 = std::chrono::steady_clock::now();
+                std::cerr << "presolve: "
+                          << std::chrono::duration<double>(t1-t0).count() << "s" << std::endl;
+                Ps = fix_degenerate_dimensions_observe();
                 P = Ps;
+                auto t2 = std::chrono::steady_clock::now();
+                std::cerr << "fix_degenerate_dimensions_observe: "
+                          << std::chrono::duration<double>(t2-t1).count() << "s" << std::endl;
             }
             
-            if (find_interior_point()) {
+            auto t3 = std::chrono::steady_clock::now();
+            bool has_interior = find_interior_point();
+            auto t4 = std::chrono::steady_clock::now();
+            std::cerr << "find_interior_point: "
+                          << std::chrono::duration<double>(t4-t3).count() << "s" << std::endl;
+
+            if (has_interior) {
+                auto t5 = std::chrono::steady_clock::now();
                 Ps = redundancy_removal_clarkson();
+                auto t6 = std::chrono::steady_clock::now();
+                std::cerr << "redundancy_removal_clarkson: "
+                          << std::chrono::duration<double>(t6-t5).count() << "s" << std::endl;
             } else {
+                if (!config.fallback_on_interior_failure) {
+                    std::cerr << "ClarksonSimplifier: No interior point found, and fallback is disabled, returning original polytope"
+                              << std::endl;
+                    return {P, false};
+                }
+
                 // Without an interior point clarkson cannot run.
                 ExhaustiveConfig exhaustive_config = config;
                 exhaustive_config.fix_dimensions = false;
@@ -92,12 +130,11 @@ class ClarksonSimplifier {
             return {Ps, true};
         }
 
-    private:
-        // Types.
-        typedef typename MetabolicPolytope<Point>::MT MT;
-        typedef typename MetabolicPolytope<Point>::VT VT;
-        typedef typename MetabolicPolytope<Point>::NT NT;
+        VT const& getInteriorPoint() const {
+            return z;
+        }
 
+    private:
         // A single side of the box bound, treated as a single row of the equivalent inequality
         // system A x <= b. An upper bound is of the form x_k <= b_u(k) and a lower bound is of
         // the form b_l(k) <= x_k.
@@ -108,12 +145,10 @@ class ClarksonSimplifier {
             // True for an upper bound, false for a lower bound.
             bool is_upper;
 
-            // Orders inequalities so they can be added in an std::set.
-            // @param other_ineq the inequality to compare against
-            // @return true if this inequality precedes other_ineq
-            bool operator<(Ineq const& other_ineq) const {
-                if (k != other_ineq.k) return k < other_ineq.k;
-                return is_upper < other_ineq.is_upper;
+            // Maps this inequality to a unique index in [0, 2d-1], used to address
+            // position in the I vector during Clarkson's algorithm.
+            unsigned map() const {
+                return 2u*k+(is_upper ? 1u : 0u);
             }
         };
 
@@ -128,10 +163,17 @@ class ClarksonSimplifier {
 
         // The interior point.
         VT z;
+
+        std::vector<double> max_observed, min_observed;
+
         // Runs the LP stored in highs.
         // @return true if solved to optimality
         bool run_lp() {
             highs.run();
+            if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+                highs.clearSolver();
+                highs.run();
+            }
             return highs.getModelStatus() == HighsModelStatus::kOptimal;
         }
 
@@ -191,36 +233,29 @@ class ClarksonSimplifier {
         // @param config the simplification configuration
         // @param success false if the ray escapes without hiting a facet
         // @return the facet hit first, meaningful only when success is true
-        bool ray_shoot(VT const& r, Ineq & hit)
+        bool ray_shoot(std::vector<Ineq> const& J, VT const& r, Ineq & hit)
         {
-            unsigned d = P.getDimension();
             double best = std::numeric_limits<double>::infinity();
             bool found = false;
 
             // Goes over all variables.
-            for (unsigned k = 0; k < d; ++k) {
-                double rk = (double)r(k);
+            for (Ineq const& c : J) {
+                double rk = (double)r(c.k);
                 if (std::abs(rk) < config.ray_tolerance) continue;
 
-                // Goes over both inequalities.
-                for (unsigned side = 0; side < 2; ++side) {
-                    Ineq c{k, side==1};
+                double tr = c.is_upper ? rk : -rk;
+                if (tr <= config.ray_tolerance) continue;
 
-                    double tr = c.is_upper ? rk : -rk;
-                    if (tr <= config.ray_tolerance) continue;
+                double rhs = row_rhs(c);
+                double tz = row_value(c, z);
+                double t = (rhs-tz)/tr;
 
-                    double rhs = row_rhs(c);
-                    if (std::isinf(rhs)) continue;
+                if (t < 0.0) continue;
 
-                    double tz = row_value(c, z);
-                    double t = (rhs-tz)/tr;
-                    if (t < 0.0) continue;
-
-                    if (!found || t < best) {
-                        best = t;
-                        hit = c;
-                        found = true;
-                    }
+                if (!found || t < best) {
+                    best = t;
+                    hit = c;
+                    found = true;
                 }
             }
             
@@ -272,6 +307,147 @@ class ClarksonSimplifier {
         // Converts every variable that the inequalities and bounds pin to
         // a single value, into an equality.
         // @return the polytope with the degenerate dimensions moved into A_eq
+        MetabolicPolytope<Point> fix_degenerate_dimensions_naive() {
+            MetabolicPolytope<Point> tP = P;
+            unsigned const& d = P.getDimension();
+
+            if (!run_lp()) return tP;
+
+            bool changed = true;
+
+            while (changed) {
+                changed = false;
+
+                for (unsigned k = 0; k < d; ++k) {
+                    double l = highs.getLp().col_lower_[k];
+                    double u = highs.getLp().col_upper_[k];
+
+                    if (l > -kHighsInf && u < kHighsInf && std::abs(u-l) < config.dim_tolerance) {
+                        fix_dimension(k, (NT)((l+u)/2.0));
+                        changed = true;
+                        continue;
+                    }
+
+                    if (l <= -kHighsInf && u >= kHighsInf) continue;
+
+                    highs.changeColCost((HighsInt)k, 1.0);
+                    highs.changeObjectiveSense(ObjSense::kMaximize);
+
+                    if (!run_lp()) {
+                        highs.changeColCost((HighsInt)k, 0.0);
+                        continue;
+                    }
+
+                    double max_val = highs.getObjectiveValue();
+                    highs.changeObjectiveSense(ObjSense::kMinimize);
+                    if (!run_lp()) {
+                        highs.changeColCost((HighsInt)k, 0.0);
+                        continue;
+                    }
+                    double min_val = highs.getObjectiveValue();
+                    highs.changeColCost((HighsInt)k, 0.0);
+
+                    if (std::abs(max_val-min_val) < config.dim_tolerance) {
+                        fix_dimension(k, (NT)((max_val+min_val)/2.0));
+                        changed = true;
+                    }
+                }
+            }
+
+            build_polytope_from_highs(highs, tP);
+            return tP;
+        }
+
+        // Converts every variable that the inequalities and bounds pin to
+        // a single value, into an equality.
+        // @return the polytope with the degenerate dimensions moved into A_eq
+        MetabolicPolytope<Point> fix_degenerate_dimensions_observe() 
+        {   
+            MetabolicPolytope<Point> tP = P;
+            unsigned const& d = P.getDimension();
+
+            min_observed.assign(d, std::numeric_limits<double>::infinity());
+            max_observed.assign(d, -std::numeric_limits<double>::infinity());
+
+            auto observe = [&]() {
+                const auto& sol = highs.getSolution().col_value;
+                for (unsigned j = 0; j < d; ++j) {
+                    if (sol[j] > max_observed[j]) max_observed[j] = sol[j];
+                    if (sol[j] < min_observed[j]) min_observed[j] = sol[j];
+                }
+            };
+
+            auto observed_variation = [&](unsigned k) {
+                return std::abs(max_observed[k]-min_observed[k]) > config.observe_tolerance;
+            };
+
+            if (!run_lp()) return tP;
+            observe();
+
+            for (unsigned k = 0; k < d; ++k) {
+                double l = highs.getLp().col_lower_[k];
+                double u = highs.getLp().col_upper_[k];
+
+                if (l > -kHighsInf && u < kHighsInf && std::abs(u-l) < config.dim_tolerance) {
+                    fix_dimension(k, (NT)((l+u)/2.0));
+                    continue;
+                }
+
+                if (l <= -kHighsInf && u >= kHighsInf) continue;
+
+                if (observed_variation(k)) continue;
+
+                highs.changeColCost((HighsInt)k, 1.0);
+                highs.changeObjectiveSense(ObjSense::kMaximize);
+
+                if (!run_lp()) {
+                    highs.changeColCost((HighsInt)k, 0.0);
+                    continue;
+                }
+
+                double max_val = highs.getObjectiveValue();
+                observe();
+
+                if (observed_variation(k)) {
+                    highs.changeColCost((HighsInt)k, 0.0);
+                    continue;
+                }
+
+                highs.changeObjectiveSense(ObjSense::kMinimize);
+
+                if (!run_lp()) {
+                    highs.changeColCost((HighsInt)k, 0.0);
+                    continue;
+                }
+
+                double min_val = highs.getObjectiveValue();
+                observe();
+
+                highs.changeColCost((HighsInt)k, 0.0);
+
+                if (std::abs(max_val - min_val) < config.dim_tolerance) {
+                    fix_dimension(k, (NT)((max_val+min_val)/2.0));
+                }
+            }
+
+            build_polytope_from_highs(highs, tP);
+            return tP;
+        }
+
+        void relax_reaction(unsigned k) {
+            highs.changeColBounds((HighsInt)k, -kHighsInf, kHighsInf);
+        }
+
+        void presolve() {
+            auto pre = solve_homogeneous_presolve_spqr(P.getEqualities());
+            std::cout << "presolved fixed : " << pre.pinned.size() << std::endl;
+            for (unsigned k : pre.pinned)
+                relax_reaction(k);
+        }
+
+        // Converts every variable that the inequalities and bounds pin to
+        // a single value, into an equality.
+        // @return the polytope with the degenerate dimensions moved into A_eq
         MetabolicPolytope<Point> fix_degenerate_dimensions() 
         {   
             MetabolicPolytope<Point> tP = P;
@@ -317,7 +493,7 @@ class ClarksonSimplifier {
             };
 
             auto observe_variation = [&](unsigned k) {
-                return std::abs(u_observed[k]-l_observed[k]) > config.dim_tolerance;
+                return std::abs(u_observed[k]-l_observed[k]) > config.observe_tolerance;
             };
 
             if (!run_lp()) return tP;
@@ -423,6 +599,7 @@ class ClarksonSimplifier {
                 slack_highs.addRow(-kHighsInf, (double)b_u(j), 2, idx, val);
             }
         }
+
         slack_highs.changeColCost(d, 1.0);
         slack_highs.changeObjectiveSense(ObjSense::kMaximize);
         slack_highs.run();
@@ -457,48 +634,64 @@ class ClarksonSimplifier {
             highs.changeColBounds((HighsInt)j, -kHighsInf, kHighsInf);
 
         // Holds the inequalities with unknown redundancy status.
-        std::set<Ineq> J;
+        std::vector<Ineq> J;
+        std::vector<int> pos(2*d, -1);
+
+        auto J_insert_const = [&](Ineq c) {
+            pos[c.map()] = (int)J.size();
+            J.push_back(c);
+        };
+
+        auto J_erase_const = [&](Ineq c) {
+            int p = pos[c.map()];
+            if (p < 0) return false;
+
+            Ineq last = J.back();
+            J[p] = last;
+            pos[last.map()] = p;
+            J.pop_back();
+            pos[c.map()] = -1;
+            return true;
+        };
+
+
         for (unsigned k = 0; k < d; ++k) {
-            if (!std::isinf((double)b_l(k))) J.insert(Ineq{k, false});
-            if (!std::isinf((double)b_u(k))) J.insert(Ineq{k, true});
+            if (!std::isinf((double)b_l(k))) J_insert_const(Ineq{k, false});
+            if (!std::isinf((double)b_u(k))) J_insert_const(Ineq{k, true});
         }
 
         std::vector<Ineq> I;
 
         std::mt19937 rng(config.clarkson_seed);
-        std::vector<unsigned> fail_count(d, 0);
+        std::vector<unsigned> fail_count(2*d, 0);
+
 
         while (!J.empty()) {
             // Picks constraints at random to make progress when LPs fail.
             std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
-            auto it = J.begin();
-            std::advance(it, pick(rng));
-
-            Ineq k_ineq = *it;
+            Ineq k_ineq = J[pick(rng)];
 
             bool solved = false;
             auto [is_redundant, x_star] = test_redundancy(k_ineq, solved);
 
             if (!solved) {
-                if (++fail_count[k_ineq.k] > config.failed_iter_count) {
-                    for (Ineq const& j : J) {
-                        I.push_back(j);
-                    }
+                if (++fail_count[k_ineq.map()] > config.failed_iter_count) {
+                    I.insert(I.end(), J.begin(), J.end());
                     break;
                 }
                 continue;
             }
 
             if (is_redundant) {
-                J.erase(k_ineq);
+                J_erase_const(k_ineq);
                 continue;
             }
 
             Ineq hit;
-            if (!ray_shoot(x_star-z, hit) || !J.erase(hit)) {
+            if (!ray_shoot(J, x_star-z, hit) || !J_erase_const(hit)) {
                 I.push_back(k_ineq);
                 enforce_ineq(k_ineq);
-                J.erase(k_ineq);
+                J_erase_const(k_ineq);
             } else {
                 I.push_back(hit);
                 enforce_ineq(hit);

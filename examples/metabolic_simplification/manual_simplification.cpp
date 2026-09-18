@@ -50,10 +50,22 @@ int main(int argc, char* argv[]) {
               << " finite bounds : " << P.getNumFiniteBounds() << "\n" << std::endl;
     
     // Simplifies the polytope, removing redundant bounds and fixing pinned variables.
-    ExhaustiveConfig config;
+    ClarksonConfig config;
     config.fix_dimensions = true; 
-    ExhaustiveSimplifier f(P, config);
+    config.fallback_on_interior_failure = false;
+
+    // Transforms the simplified polytope, giving a full dimensional H-Polytope
+    // that volume estimation can work with.
+
+    ClarksonSimplifier<Point> f(P, config);
     auto [Pnew, ok] = f.simplify();
+
+    auto trans_result_or = transform(Pnew);
+    Hpolytope HPor = std::get<0>(trans_result_or);
+    auto ball = HPor.ComputeInnerBall();
+    std::cout << "\noriginal polytope transformed\n"
+              << " ball radius : " << ball.second
+              << std::endl;
 
     if (!ok) {
         std::cerr << "simplification failed" << std::endl;

@@ -147,4 +147,44 @@ NullspacePresolveResult solve_homogeneous_presolve_spqr(MetabolicPolytope<Point>
 {
     return solve_homogeneous_presolve_spqr(P.getEqualities(), tol);
 }
+
+// Returns the indices of a maximal independent of rows of A sorted.
+// @tparam MT the matrix type
+// @param A the equality matrix
+// @param tol the rank / zero tolerance
+template <typename MT>
+std::vector<unsigned> find_independent_rows_spqr(MT const& A, double tol = 1e-7) {
+    cholmod_common cc;
+    cholmod_l_start(&cc);
+
+    Eigen::SparseMatrix<double, Eigen::ColMajor> At = A.transpose().eval().template cast<double>();
+    cholmod_sparse* B = eigen_to_cholmod(At, &cc);
+
+    cholmod_sparse* R = nullptr;
+    int64_t* E = nullptr;
+    int64_t r = SuiteSparseQR<double, int64_t>(SPQR_ORDERING_DEFAULT, tol, (int64_t)0, B, &R, &E, &cc);
+
+    if (r < 0) {
+        cholmod_l_free_sparse(&B, &cc);
+        cholmod_l_finish(&cc);
+        throw std::runtime_error("find_independent_rows_spqr: SPQR failed");
+    }
+
+    std::vector<unsigned> keep(r);
+    for (int64_t i = 0; i < r; ++i) {
+        keep[i] = E ? (unsigned)E[i] : (unsigned)i;
+    }
+
+    std::sort(keep.begin(), keep.end());
+
+    if (E) {
+        cholmod_l_free((size_t)At.cols(), sizeof(int64_t), E, &cc);
+    }
+
+    cholmod_l_free_sparse(&R, &cc);
+    cholmod_l_free_sparse(&B, &cc);
+    cholmod_l_finish(&cc);
+
+    return keep;
+}
 #endif

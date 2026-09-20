@@ -50,8 +50,11 @@ struct ClarksonConfig : ExhaustiveConfig {
     // Tracks if fallback should be used when Clarkson fails to find an interior point.
     bool fallback_on_interior_failure = true;
 
-    // This the observation tolerance.
+    // This is the observation tolerance.
     double observe_tolerance = 1e-6;
+
+    // This is the residual tolerance when removing linear independent rows.
+    double residual_tolerance = 1e-7;
 };
 
 // Simplifies a MetabolicPolytope using Clarkson's algorithm. The model starts with
@@ -96,7 +99,16 @@ class ClarksonSimplifier {
                 auto t2 = std::chrono::steady_clock::now();
                 std::cerr << "fix_degenerate_dimensions_observe: "
                           << std::chrono::duration<double>(t2-t1).count() << "s" << std::endl;
+            
             }
+            
+            
+            if (!remove_dependent_rows_from_polytope(Ps)) return {P, false};
+            P = Ps;
+
+            highs.clear();
+            build_lp_model(P, highs);
+            configure_highs(highs, config);
             
             auto t3 = std::chrono::steady_clock::now();
             bool has_interior = find_interior_point();
@@ -439,10 +451,99 @@ class ClarksonSimplifier {
         }
 
         void presolve() {
+            auto const& A = P.getEqualities();
+            std::cerr << "A_eq: " << A.rows() << " x " << A.cols() << std::endl;
             auto pre = solve_homogeneous_presolve_spqr(P.getEqualities());
-            std::cout << "presolved fixed : " << pre.pinned.size() << std::endl;
+            std::cout << "presolved fixed : " << pre.pinned.size() << std::endl
+                      << "rank is : " << pre.rank << std::endl;
             for (unsigned k : pre.pinned)
                 relax_reaction(k);
+        }
+
+        // Minimizes the equality system by dropping linear dependent rows.
+        // @param Ps the polytope to minimize
+        bool remove_dependent_rows_from_polytope(MetabolicPolytope<Point> & Ps) {
+            MT const& A = Ps.getEqualities();
+            VT const& b = Ps.getEqualityBounds();
+            unsigned const d = Ps.getDimension();
+            unsigned const m = (unsigned)A.rows();
+
+            if (!run_lp()) {
+                std::cerr << "ClarksonSimplifier: the model is infeasible or HiGHS failed" 
+                          << std::endl;
+                
+                return false;
+            }
+
+            const auto& sol = highs.getSolution().col_value;
+            Eigen::VectorXd x0(d);
+
+            for (unsigned j = 0; j < d; ++j)
+                x0(j) = sol[j];
+
+            std::vector<unsigned> independent_rows_id = find_independent_rows_spqr(A);
+
+            std::vector<bool> kept_rows(m, false);
+            
+            for (unsigned i : independent_rows_id)
+                kept_rows[i] = true;
+
+            Eigen::SparseMatrix<double, Eigen::RowMajor> Ad = A.template cast<double>();
+            Eigen::VectorXd res = Ad*x0;
+
+            double worst = 0.0;
+            for (unsigned i = 0; i < m; ++i) 
+                if (!kept_rows[i]) 
+                    worst = std::max(worst, std::abs(res(i)-(double)b(i)));
+            
+            std::cerr << "independent rows: " << independent_rows_id.size() << " of " << m
+                      << ", max residual of dropped rows: " << worst << std::endl;
+
+            if (worst > config.residual_tolerance) {
+                std::cerr << "ClarksonSimplifier: a dropped row is violated by " << worst
+                          << ", lower the rank tolerance" << std::endl;
+
+                return false;
+            }
+
+            MT Amin;
+            VT bmin;
+
+            select_rows(A, b, independent_rows_id, Amin, bmin);
+
+            Ps = MetabolicPolytope<Point>(d, Amin, Ps.getLowerBounds(), Ps.getUpperBounds(), bmin);
+
+            return true;
+        }
+
+
+        // Removes redundant rows from the stoichiometric matrix.
+        // Keeps only the rows of the equality matrix listed in kept_rows.
+        // @param A the matrix to slice
+        // @param b the right hand side vector of A
+        // @param keep the indices of the rows to keep
+        // @param Amin is the sliced matrix
+        // @param bmin is the sliced right hand side
+        void select_rows(MT const& A, VT const& b, std::vector<unsigned> const& kept_rows,
+                         MT& Amin, VT& bmin)
+        {
+            std::vector<int> maps_rows((std::size_t)A.rows(), -1);
+            for (unsigned i = 0; (unsigned)i < kept_rows.size(); ++i)
+                maps_rows[kept_rows[i]] = (int)i;
+
+            std::vector<Eigen::Triplet<typename MT::Scalar>> triplets;
+            bmin.resize((Eigen::Index)kept_rows.size());
+
+            for (unsigned i = 0; (unsigned)i < A.rows(); ++i) {
+                if (maps_rows[i] < 0) continue;
+
+                bmin(maps_rows[i]) = b(i);
+                for (typename MT::InnerIterator it(A, i); it; ++it)
+                    triplets.emplace_back(maps_rows[i], it.col(), it.value());
+            }
+
+            Amin.resize((Eigen::Index)kept_rows.size(), A.cols());
+            Amin.setFromTriplets(triplets.begin(), triplets.end());
         }
 
         // Converts every variable that the inequalities and bounds pin to

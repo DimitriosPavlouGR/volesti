@@ -21,6 +21,90 @@
 #include <cmath>
 #include "convex_bodies/hpolytope.h"
 #include "convex_bodies/metabolic_polytope.hpp"
+#include "preprocess/metabolic/simplification_clarkson.hpp"
+
+// Converts the LP counters to json.
+// @param j the JSON to fill
+// @param s the counters
+inline void to_json(nlohmann::json& j, LpStats const& s) {
+    j = nlohmann::json{
+        {"solves", s.solves},
+        {"retries", s.retries},
+        {"failures", s.failures},
+        {"iterations", s.iterations}
+    };
+}
+
+// Converts a phase into JSON.
+// @param j the JSON to fill
+// @param p the phase
+inline void to_json(nlohmann::json& j, PhaseReport const& p) {
+    j = nlohmann::json{
+        {"name", p.name},
+        {"seconds", p.seconds},
+        {"lps", p.lps}
+    };
+}
+
+// Converts the report into a JSON, grouped by stage in the order they run.
+// @param j the JSON to fill
+// @param r the report
+inline void to_json(nlohmann::json& j, SimplificationReport const& r) {
+    j["status"] = r.status;
+
+    j["input"] = {
+        {"variables", r.dimension},
+        {"equalities", r.input_equalities},
+        {"finite_bounds", r.input_finite_bounds}
+    };
+
+    if (r.rank >= 0) {
+        j["presolve"] = {
+            {"rank", r.rank},
+            {"pinned_by_equalities", r.pinned_by_equalities}
+        };
+    } else {
+        j["presolve"] = nullptr;
+    }
+
+    if (r.fixing_ran) {
+        j["dimension_fixing"] = {
+            {"fixed_by_bounds", r.fixed_by_bounds},
+            {"equalities_after_fixing", r.equalities_after_fixing}
+        };
+    } else {
+        j["dimension_fixing"] = nullptr;
+    }
+
+    j["row_reduction"] = {
+        {"rows_before", r.rows_before_reduction},
+        {"rows_after", r.rows_after_reduction},
+        {"applied", r.row_reduction_applied},
+        {"max_dropped_residual", r.dropped_row_residual}
+    };
+
+    j["interior_point"] = {
+        {"found", r.interior_found},
+        {"slack", r.interior_slack}
+    };
+
+    j["clarkson"] = {
+        {"untested_bounds", r.untested_bounds},
+    };
+
+    j["output"] = {
+        {"equalities", r.output_equalities},
+        {"finite_bounds", r.output_finite_bounds},
+        {"bounds_relaxed", r.input_finite_bounds-r.output_finite_bounds}
+    };
+
+    j["phases"] = r.phases;
+
+    j["total"] = {
+        {"seconds", r.total_seconds},
+        {"lps", r.total}
+    };
+}
 
 // Converts a dense matrix into an array for row arrays, so that it can be represented in .json
 // @tparam MT the eigen expression type
@@ -152,26 +236,29 @@ nlohmann::json construct_network_json(MetabolicPolytope<Point> const& P)
 // @tparam Point the point type
 // @tparam DenseMT the dense matrix type of the nullspace basis
 // @tparam VT the vector type of the shift vector
-// @param model_path path to the .json file
 // @param name the name of the model
 // @param P the original network
 // @param Ps the simplified network
 // @param HP the full dimensional polytope
 // @param N a basis of the nullspace of the equality system
 // @param shift a particular solution of the equality system
+// @param report the simplification report
 template <typename Point, typename DenseMT, typename VT>
 nlohmann::json construct_json(std::string const& name,
                               MetabolicPolytope<Point> const& P,
                               MetabolicPolytope<Point> const& Ps,
                               HPolytope<Point> const& HP,
                               DenseMT const& N,
-                              VT const& shift)
+                              VT const& shift,
+                              SimplificationReport const* report = nullptr)
 {
     nlohmann::json jsn;
     jsn["name"] = name;
     jsn["original"] = construct_network_json(P);
     jsn["simplified"] = construct_network_json(Ps);
     jsn["transformed"] = construct_transformed_json(HP, N, shift);
+
+    if (report) jsn["report"] = *report;
 
     return jsn;
 }
@@ -187,6 +274,7 @@ nlohmann::json construct_json(std::string const& name,
 // @param HP the full dimensional polytope
 // @param N a basis of the nullspace of the equality system
 // @param shift a particular solution of the equality system
+// @param report the simplification report
 template <typename Point, typename DenseMT, typename VT>
 void export_to_json(std::string model_path,
                     std::string const& name,
@@ -194,9 +282,10 @@ void export_to_json(std::string model_path,
                     MetabolicPolytope<Point> const& Ps,
                     HPolytope<Point> const& HP,
                     DenseMT const& N,
-                    VT const& shift)
+                    VT const& shift,
+                    SimplificationReport const* report = nullptr)
 {
-    nlohmann::json jsn = construct_json(name, P, Ps, HP, N, shift);
+    nlohmann::json jsn = construct_json(name, P, Ps, HP, N, shift, report);
 
     std::ofstream f(model_path);
     if (!f.is_open())

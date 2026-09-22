@@ -43,6 +43,9 @@ struct ExhaustiveConfig {
 
     // Solver time limit.
     double time_limit = 200;
+
+    // Allows output.
+    bool verbose = true;
 };
 
 // Applies the solver options shared by every lp in this file.

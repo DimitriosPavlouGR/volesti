@@ -47,9 +47,6 @@ struct ClarksonConfig : ExhaustiveConfig {
     // The seed based on which clarkson picks inequalities.
     unsigned clarkson_seed = 0;
 
-    // Tracks if fallback should be used when Clarkson fails to find an interior point.
-    bool fallback_on_interior_failure = true;
-
     // This is the observation tolerance.
     double observe_tolerance = 1e-6;
 
@@ -57,12 +54,97 @@ struct ClarksonConfig : ExhaustiveConfig {
     double residual_tolerance = 1e-7;
 };
 
+// Counters of the LP work done during a simplification run.
+struct LpStats {
+    // Number of calls to HiGHS run(), includes failed runs
+    unsigned solves = 0;
+
+    // Number of cold re-solves after a non-optimal status.
+    unsigned retries = 0;
+
+    // Solves that failed even after a retry.
+    unsigned failures = 0;
+
+    // Simplex iterations summed over all solves.
+    long long iterations = 0;
+};
+
+// The time and LP work spent in one phase of simplification.
+struct PhaseReport {
+    // The name of the phase.
+    std::string name;
+
+    // The wall clock time spent in the phase.
+    double seconds = 0.0;
+
+    // The LP work done in the phase.
+    LpStats lps;
+};
+
+// All useful information worth knowing about a simplification run, collected while it runs.
+struct SimplificationReport {
+    // The outcome of the run.
+    std::string status;
+
+    // The number of variables.
+    unsigned dimension = 0;
+
+    // The number of equality rows.
+    unsigned input_equalities = 0;
+
+    // The number of finite bounds of the input.
+    unsigned input_finite_bounds = 0;
+
+    // The rank of the input equality matrix, -1 if presolve did not run.
+    long rank = -1;
+
+    // Number of skipped bounds during clarkson due to HiGHS failures.
+    unsigned untested_bounds = 0;
+
+    // The number of variables pinned by the equalities of the homogeneoys system A_eq x = 0.
+    unsigned pinned_by_equalities = 0;
+
+    // Tracks if dimension fixing ran.
+    bool fixing_ran = false;
+
+    // The number of variables fixed by bounds.
+    unsigned fixed_by_bounds = 0;
+
+    // The variables fixed by dimension fixing.
+    unsigned equalities_after_fixing = 0;
+
+    // The number of equality rows before and after dropping the dependent rows.
+    unsigned rows_before_reduction = 0;
+    unsigned rows_after_reduction = 0;
+
+    // Tracks if the dependent rows were removed.
+    bool row_reduction_applied = false;
+
+    // The largest violation of a dropped row at a feasible point.
+    double dropped_row_residual = 0.0;
+
+    // Finds if an interior point was found and the slack value.
+    bool interior_found = false;
+    double interior_slack = 0.0;
+
+    // The number of equality rows and finite bounds after simplification.
+    unsigned output_equalities = 0;
+    unsigned output_finite_bounds = 0;
+
+    // The time and LP work of every phase in order.
+    std::vector<PhaseReport> phases;
+
+    // The LP work and wall clock time of the whole run.
+    LpStats total;
+    double total_seconds = 0.0;
+};
+
 // Simplifies a MetabolicPolytope using Clarkson's algorithm. The model starts with
 // every bound relaxed and iteratively finds and applies essential constraints to the model.
 //
 // Clarkson needs a point in the interior of the polytope, which only exists once
-// degenerate dimensions have been fixed. If no interior point is found the exhaustive
-// method is used as fallback.
+// degenerate dimensions have been fixed. If no interior point is found the method cannot
+// run and the user has to manually change the configuration parameters.
 // @tparam Point the point type of the polytope
 template <typename Point>
 class ClarksonSimplifier {
@@ -78,72 +160,86 @@ class ClarksonSimplifier {
         ClarksonSimplifier(MetabolicPolytope<Point> const& P_in,
                         ClarksonConfig const& config_in = ClarksonConfig{})
             : config(config_in), P(P_in)
-        {
-            build_lp_model(P, highs);
+        {   
             configure_highs(highs, config);
+            build_lp_model(P, highs);
         }
 
         // Runs the simplification.
         // @return the simplified polytope, and false if the polytope was empty
         std::pair<MetabolicPolytope<Point>, bool> simplify() {
+            report = SimplificationReport{};
+            start_time = std::chrono::steady_clock::now();
+
+            report.dimension = P.getDimension();
+            report.input_equalities = P.getNumEqualities();
+            report.input_finite_bounds = P.getNumFiniteBounds();
+
             MetabolicPolytope<Point> Ps = P;
 
-            if (config.fix_dimensions) {
-                auto t0 = std::chrono::steady_clock::now();
+            Phase p;
+
+            // Presolve phase.
+            if (config.presolve) {
+                p = begin_phase();
                 this->presolve();
-                auto t1 = std::chrono::steady_clock::now();
-                std::cerr << "presolve: "
-                          << std::chrono::duration<double>(t1-t0).count() << "s" << std::endl;
+                end_phase("presolve", p);
+            }
+
+            // Dimension fixing phase.
+            if (config.fix_dimensions) {
+                p = begin_phase();
                 Ps = fix_degenerate_dimensions_observe();
                 P = Ps;
-                auto t2 = std::chrono::steady_clock::now();
-                std::cerr << "fix_degenerate_dimensions_observe: "
-                          << std::chrono::duration<double>(t2-t1).count() << "s" << std::endl;
-            
+                report.fixing_ran = true;
+                report.equalities_after_fixing = Ps.getNumEqualities();
+                end_phase("dimension fixing", p);
             }
             
-            
-            if (!remove_dependent_rows_from_polytope(Ps)) return {P, false};
+            p = begin_phase();
+            if (!remove_dependent_rows_from_polytope(Ps)) 
+                return finalize(P, false, "INFEASIBLE");
             P = Ps;
 
             highs.clear();
-            build_lp_model(P, highs);
             configure_highs(highs, config);
-            
-            auto t3 = std::chrono::steady_clock::now();
+            build_lp_model(P, highs);
+            end_phase("row reduction", p);
+
+
+            p = begin_phase();
             bool has_interior = find_interior_point();
-            auto t4 = std::chrono::steady_clock::now();
-            std::cerr << "find_interior_point: "
-                          << std::chrono::duration<double>(t4-t3).count() << "s" << std::endl;
+            report.interior_found = has_interior;
+            end_phase("interior point", p);
 
             if (has_interior) {
-                auto t5 = std::chrono::steady_clock::now();
+                p = begin_phase();
                 Ps = redundancy_removal_clarkson();
-                auto t6 = std::chrono::steady_clock::now();
-                std::cerr << "redundancy_removal_clarkson: "
-                          << std::chrono::duration<double>(t6-t5).count() << "s" << std::endl;
+                end_phase("clarkson", p);
             } else {
-                if (!config.fallback_on_interior_failure) {
-                    std::cerr << "ClarksonSimplifier: No interior point found, and fallback is disabled, returning original polytope"
-                              << std::endl;
-                    return {P, false};
-                }
-
-                // Without an interior point clarkson cannot run.
-                ExhaustiveConfig exhaustive_config = config;
-                exhaustive_config.fix_dimensions = false;
-
-                ExhaustiveSimplifier<Point> fallback(P, exhaustive_config);
-                auto [Pnew, ok] = fallback.simplify();
-                if (!ok) return {P, false};
-                Ps = Pnew;
+                return finalize(Ps, false, "NO INTERIOR POINT");
             }
 
-            return {Ps, true};
+            return finalize(Ps, true, "OK");
         }
 
+        // Returns the interior point found before Clarkson runs. This point is undefined if
+        // an interior point was not found before simplification.
+        // @return an interior point
         VT const& getInteriorPoint() const {
             return z;
+        }
+
+        // Returns the LP work done so far.
+        // @return the LP counters
+        LpStats const& getLpStats() const {
+            return lp_stats;
+        }
+
+        // Returns the simplification report produced by simplifier.
+        // @return the simplification report
+        SimplificationReport const& getReport() const {
+            return report;
         }
 
     private:
@@ -176,17 +272,193 @@ class ClarksonSimplifier {
         // The interior point.
         VT z;
 
+        // The LP work done logged.
+        LpStats lp_stats;
+
+        // The report of the simplification.
+        SimplificationReport report;
+
+        // The time the current run started.
+        std::chrono::steady_clock::time_point start_time;
+
+        // Substracts one set of counters from another.
+        // @param a the earlier counters
+        // @param b the later counters
+        // @return the work done between the two
+        static LpStats lp_diff(LpStats const& a, LpStats const& b) {
+            LpStats c;
+            c.solves = b.solves-a.solves;
+            c.retries = b.retries-a.retries;
+            c.failures = b.failures-a.failures;
+            c.iterations = b.iterations-a.iterations;
+            return c;
+        }
+
+        // Snapshot of the clock and the counters at the start of a phase.
+        struct Phase {
+            std::chrono::steady_clock::time_point t;
+            LpStats s;
+        };
+
+        // Takes a snapshot of the clock and the counters at the start of the phase.
+        // @return the snapshot
+        Phase begin_phase() const {
+            return {std::chrono::steady_clock::now(), lp_stats};
+        }
+
+        // Records the time and LP work spent since the snapshot was taken.
+        // @param name the name of the phase
+        // @param p the snapshot taken at the start of the phase
+        void end_phase(std::string const& name, Phase const& p) {
+            PhaseReport pr;
+            pr.name = name;
+            pr.seconds = std::chrono::duration<double>(
+                         std::chrono::steady_clock::now()-p.t).count();
+            pr.lps = lp_diff(p.s, lp_stats);
+            report.phases.push_back(pr);
+        };
+
+        // Prints the report of the last run.
+        // @param os the stream to print to
+        void print_report(std::ostream& os = std::cout) const {
+            SimplificationReport const& r = report;
+
+            std::ostringstream out;
+
+            auto key = [&](std::string const& k) -> std::ostream& {
+                return out << " " << std::left << std::setw(18) << k << std::right;
+            };
+
+
+            key("status") << r.status << "\n";
+            key("input")  << r.dimension << " variables, " << r.input_equalities
+                          << " equalities, " << r.input_finite_bounds << " finite bounds\n";
+
+            if (r.rank >= 0) {
+                key("presolve") << "rank " << r.rank << ", " << r.pinned_by_equalities
+                                << " variables pinned by the equalities\n";
+            } else {
+                key("presolve") << "skipped\n";
+            }
+
+            if (r.fixing_ran) {
+                key("dimension fixing") << r.fixed_by_bounds << " variables fixed, "
+                                        << r.equalities_after_fixing << " equalities in total\n";
+            } else {
+                key("dimension fixing") << "skipped\n";
+            }
+
+            if (r.rows_before_reduction > 0) {
+                key("row reduction") << r.rows_after_reduction << " of "
+                                     << r.rows_before_reduction << " rows kept";
+                if (r.row_reduction_applied) {
+                    out << ", max residual of dropped rows "
+                       << std::scientific << std::setprecision(2) << r.dropped_row_residual
+                       << std::defaultfloat;
+                } else {
+                    out << " (not applied)";
+                }
+                out << "\n";
+            }
+
+            key("interior point") << (r.interior_found ? "found" : "not found");
+            if (r.interior_slack > 0.0 || r.interior_found) {
+                out << ", slack " << std::scientific << std::setprecision(3)
+                   << r.interior_slack << std::defaultfloat;
+            }
+            out << "\n";
+
+            if (r.untested_bounds) {
+                key("clarkson") << r.untested_bounds
+                                << " bounds kept untested after LP failures in Clarkson\n";
+            }
+
+            if (r.status == "OK") {
+                unsigned relaxed = r.input_finite_bounds-r.output_finite_bounds;
+                key("output") << r.output_equalities << " equalities, "
+                              << r.output_finite_bounds << " finite bounds ("
+                              << relaxed << " relaxed)\n";
+            }
+
+            out << " phases\n";
+
+            auto phase_line = [&](std::string const& name, double secs, LpStats const& s) {
+                out << "     " << std::left << std::setw(20) << name << std::right
+                    << std::fixed << std::setprecision(3) << std::setw(10) << secs << "s"
+                    << std::setw(9) << s.solves << " LPs"
+                    << std::setw(11) << s.iterations << " iterations";
+                if (s.retries > 0) out << ", " << s.retries << " retries";
+                if (s.failures > 0) out << ", " << s.failures << " failed";
+                out << "\n";
+
+            };
+
+            for (PhaseReport const& pr : r.phases) {
+                phase_line(pr.name, pr.seconds, pr.lps);
+            }
+            phase_line("total", r.total_seconds, r.total);
+
+            std::string body = out.str();
+            std::istringstream lines(body);
+            std::size_t width = 0;
+
+            for (std::string l; std::getline(lines, l); width = std::max(width, l.size()));
+
+            std::string title = " [VolEsti] - [ClarksonSimplifier] ";
+            width = std::max(width, title.size()+2);
+            std::size_t pad = width-title.size();
+            std::size_t left = pad/2;
+
+            os << std::string(left, '-') << title << std::string(pad-left, '-') << "\n"
+               << body
+               << std::string(width, '-') << "\n" << std::flush;
+        }
+
+        // Finalizes the report, prints it when config.verbose is on, and returns the result.
+        // @param Pout the polytope to return
+        // @param ok false if the polytope was found empty or the run failed
+        // @param status the outcome to record
+        // @return the result of simplify()
+        std::pair<MetabolicPolytope<Point>, bool> finalize(MetabolicPolytope<Point> const& Pout,
+                                                           bool ok, std::string const& status)
+        {
+            report.status = status;
+            report.total = lp_stats;
+            report.total_seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now()-start_time).count();
+
+            if (ok) {
+                report.output_equalities = Pout.getNumEqualities();
+                report.output_finite_bounds = Pout.getNumFiniteBounds();
+            }
+
+            if (config.verbose) print_report();
+
+            return {Pout, ok};
+        }
+
         std::vector<double> max_observed, min_observed;
 
         // Runs the LP stored in highs.
         // @return true if solved to optimality
         bool run_lp() {
             highs.run();
+            ++lp_stats.solves;
+            lp_stats.iterations += highs.getInfo().simplex_iteration_count;
+
             if (highs.getModelStatus() != HighsModelStatus::kOptimal) {
+                ++lp_stats.retries;
                 highs.clearSolver();
                 highs.run();
+                ++lp_stats.solves;
+                lp_stats.iterations += highs.getInfo().simplex_iteration_count;
             }
-            return highs.getModelStatus() == HighsModelStatus::kOptimal;
+
+            bool ok = highs.getModelStatus() == HighsModelStatus::kOptimal;
+            
+            if (!ok) ++lp_stats.failures;
+
+            return ok;
         }
 
         // Evaluates the left hand side of the constraint a x <= b. Trivially
@@ -218,6 +490,7 @@ class ClarksonSimplifier {
             double coeff = 1.0;
             highs.addRow((double)val, (double)val, 1, &id, &coeff);
             highs.changeColBounds(k, -kHighsInf, kHighsInf);
+            ++report.fixed_by_bounds;
         }
 
         // Applies one bound of P to the highs model.
@@ -241,9 +514,9 @@ class ClarksonSimplifier {
         }
 
         // Shoots the ray z+t*r, t >= 0, and returns the first box bound it crosses.
+        // @param J the untested bounds
         // @param r the ray direction
-        // @param config the simplification configuration
-        // @param success false if the ray escapes without hiting a facet
+        // @param hit receives the bound crossed first, meaningful only on success
         // @return the facet hit first, meaningful only when success is true
         bool ray_shoot(std::vector<Ineq> const& J, VT const& r, Ineq & hit)
         {
@@ -317,7 +590,7 @@ class ClarksonSimplifier {
         }
 
         // Converts every variable that the inequalities and bounds pin to
-        // a single value, into an equality.
+        // a single value, into an equality. Repeats full passes over all variables until one changes nothing.
         // @return the polytope with the degenerate dimensions moved into A_eq
         MetabolicPolytope<Point> fix_degenerate_dimensions_naive() {
             MetabolicPolytope<Point> tP = P;
@@ -371,7 +644,9 @@ class ClarksonSimplifier {
         }
 
         // Converts every variable that the inequalities and bounds pin to
-        // a single value, into an equality.
+        // a single value, into an equality, in a single pass. A variable whose
+        // values seen across the LP solutions already differ is known to vary, 
+        // so its LPs are skipped. This is the variant simplify uses.
         // @return the polytope with the degenerate dimensions moved into A_eq
         MetabolicPolytope<Point> fix_degenerate_dimensions_observe() 
         {   
@@ -446,27 +721,35 @@ class ClarksonSimplifier {
             return tP;
         }
 
-        void relax_reaction(unsigned k) {
+        // Frees both bounds of a variable in the LP model.
+        // @param k the variable index
+        void relax_variable(unsigned k) {
             highs.changeColBounds((HighsInt)k, -kHighsInf, kHighsInf);
         }
 
+        // Finds the variables that the equalities alone pin to a single value, and relaxes
+        // their bounds so that later passes skip them.
         void presolve() {
-            auto const& A = P.getEqualities();
-            std::cerr << "A_eq: " << A.rows() << " x " << A.cols() << std::endl;
             auto pre = solve_homogeneous_presolve_spqr(P.getEqualities());
-            std::cout << "presolved fixed : " << pre.pinned.size() << std::endl
-                      << "rank is : " << pre.rank << std::endl;
+            
+            report.rank = pre.rank;
+            report.pinned_by_equalities = (unsigned)pre.pinned.size();
+
             for (unsigned k : pre.pinned)
-                relax_reaction(k);
+                relax_variable(k);
         }
 
         // Minimizes the equality system by dropping linear dependent rows.
         // @param Ps the polytope to minimize
+        // @return false if no feasible point was found or a dropped row was not implied
         bool remove_dependent_rows_from_polytope(MetabolicPolytope<Point> & Ps) {
             MT const& A = Ps.getEqualities();
             VT const& b = Ps.getEqualityBounds();
             unsigned const d = Ps.getDimension();
             unsigned const m = (unsigned)A.rows();
+
+            report.rows_before_reduction = m;
+            report.rows_after_reduction = m;
 
             if (!run_lp()) {
                 std::cerr << "ClarksonSimplifier: the model is infeasible or HiGHS failed" 
@@ -495,9 +778,8 @@ class ClarksonSimplifier {
             for (unsigned i = 0; i < m; ++i) 
                 if (!kept_rows[i]) 
                     worst = std::max(worst, std::abs(res(i)-(double)b(i)));
-            
-            std::cerr << "independent rows: " << independent_rows_id.size() << " of " << m
-                      << ", max residual of dropped rows: " << worst << std::endl;
+
+            report.dropped_row_residual = worst;
 
             if (worst > config.residual_tolerance) {
                 std::cerr << "ClarksonSimplifier: a dropped row is violated by " << worst
@@ -511,17 +793,20 @@ class ClarksonSimplifier {
 
             select_rows(A, b, independent_rows_id, Amin, bmin);
 
+            report.rows_after_reduction = (unsigned)independent_rows_id.size();
+            report.row_reduction_applied = true;
+
             Ps = MetabolicPolytope<Point>(d, Amin, Ps.getLowerBounds(), Ps.getUpperBounds(), bmin);
 
             return true;
         }
 
 
-        // Removes redundant rows from the stoichiometric matrix.
+        // Keeps only the listed rows of the equality system.
         // Keeps only the rows of the equality matrix listed in kept_rows.
         // @param A the matrix to slice
         // @param b the right hand side vector of A
-        // @param keep the indices of the rows to keep
+        // @param kept_rows the indices of the rows to keep
         // @param Amin is the sliced matrix
         // @param bmin is the sliced right hand side
         void select_rows(MT const& A, VT const& b, std::vector<unsigned> const& kept_rows,
@@ -546,274 +831,177 @@ class ClarksonSimplifier {
             Amin.setFromTriplets(triplets.begin(), triplets.end());
         }
 
-        // Converts every variable that the inequalities and bounds pin to
-        // a single value, into an equality.
-        // @return the polytope with the degenerate dimensions moved into A_eq
-        MetabolicPolytope<Point> fix_degenerate_dimensions() 
-        {   
-            MetabolicPolytope<Point> tP = P;
-            MT const& A_eq    = P.getEqualities();
-            unsigned const& d = P.getDimension();
-            unsigned const& m = (unsigned)A_eq.rows();
-
-            std::vector<std::vector<unsigned>> var_apps(d);
-
-            for (unsigned i = 0; i < m; ++i) 
-                for (typename MT::InnerIterator it(A_eq, i); it; ++it)
-                    var_apps[(unsigned)it.col()].push_back(i);
-
-            std::queue<unsigned> pending;
-            std::vector<bool> queued(d, true);
-            for (unsigned k = 0; k < d; ++k) 
-                pending.push(k);
-
-            auto enqueue = [&](unsigned k) {
-                if (queued[k]) 
-                    return;
-                queued[k] = true;
-                pending.push(k);
-
-            };
-
-            auto requeue_neighbours = [&](unsigned k) {
-                for (unsigned i : var_apps[k])
-                    for (typename MT::InnerIterator it(A_eq, i); it; ++it)
-                        if ((unsigned)it.col() != k) enqueue((unsigned)it.col());
-            };
 
 
-            std::vector<double> u_observed(d, std::numeric_limits<double>::infinity());
-            std::vector<double> l_observed(d, -std::numeric_limits<double>::infinity());
+        // Finds a point in the interior of P by maximizing a uniform slack variable against all bounds.
+        //
+        // The LP solved is the following:
+        //
+        // max y s.t. A_eq x = b_eq, b_l+y <= x <= b_u-y, 0 <= y <= 1
+        // Note: the point is stored in z
+        // @return true if a point with significant slack was found
+        bool find_interior_point()
+        {
+            const MT& A_eq = P.getEqualities();
+            const VT& b_eq = P.getEqualityBounds();
+            const VT& b_l = P.getLowerBounds();
+            const VT& b_u = P.getUpperBounds();
+            unsigned d = P.getDimension();
 
-            auto observe = [&]() {
-                const auto& sol = highs.getSolution().col_value;
-                for (unsigned j = 0; j < d; ++j) {
-                    if (sol[j] > l_observed[j]) l_observed[j] = sol[j];
-                    if (sol[j] < u_observed[j]) u_observed[j] = sol[j];
+            Highs slack_highs;
+            configure_highs(slack_highs, config);
+
+            for (unsigned j = 0; j < d; ++j) {
+                slack_highs.addVar(-kHighsInf, kHighsInf);
+            }
+            slack_highs.addVar(0.0, 1.0);
+
+            for (unsigned i = 0; i < (unsigned)A_eq.rows(); ++i) {
+                std::vector<HighsInt> indices;
+                std::vector<double> values;
+                for (typename MT::InnerIterator it(A_eq, i); it; ++it) {
+                    indices.push_back((HighsInt)it.col());
+                    values.push_back((double)it.value());
                 }
-            };
+                slack_highs.addRow((double)b_eq(i), (double)b_eq(i), indices.size(), indices.data(), values.data());
+            }
 
-            auto observe_variation = [&](unsigned k) {
-                return std::abs(u_observed[k]-l_observed[k]) > config.observe_tolerance;
-            };
-
-            if (!run_lp()) return tP;
-            observe();
-
-            while (!pending.empty()) {
-                unsigned k = pending.front();
-                pending.pop();
-                queued[k] = 0;
-
-                double l = highs.getLp().col_lower_[k];
-                double u = highs.getLp().col_upper_[k];
-
-                if (l <= -kHighsInf && u >= kHighsInf) continue;
-
-                if (l > -kHighsInf && u < kHighsInf && std::abs(u-l) < config.dim_tolerance) {
-                    fix_dimension(k, (NT)((l+u)/2.0));
-                    requeue_neighbours(k);
-                    continue;
+            for (unsigned j = 0; j < d; ++j) {
+                if (!std::isinf((double)b_l(j))) {
+                    HighsInt idx[2] = {(HighsInt)j, (HighsInt)d};
+                    double val[2] = {1.0, -1.0};
+                    slack_highs.addRow((double)b_l(j), kHighsInf, 2, idx, val);
                 }
-
-                if (var_apps[k].empty()) continue;
-
-                if (observe_variation(k)) continue;
-
-                highs.changeColCost((HighsInt)k, 1.0);
-                highs.changeObjectiveSense(ObjSense::kMaximize);
-
-                if (!run_lp()) {
-                    highs.changeColCost((HighsInt)k, 0.0);
-                    continue;
-                }
-                double max_val = highs.getObjectiveValue();
-                observe();
-
-                if (observe_variation(k)) {
-                    highs.changeColCost((HighsInt)k, 0.0);
-                    continue;
-                }
-
-                highs.changeObjectiveSense(ObjSense::kMinimize);
-                if (!run_lp()) {
-                    highs.changeColCost((HighsInt)k, 0.0);
-                    continue;
-                }
-                double min_val = highs.getObjectiveValue();
-                observe();
-
-                highs.changeColCost((HighsInt)k, 0.0);
-
-                if (std::abs(max_val - min_val) < config.dim_tolerance) {
-                    fix_dimension(k, (max_val+min_val)/NT(2));
-                    requeue_neighbours(k);
+                if (!std::isinf((double)b_u(j))) {
+                    HighsInt idx[2] = {(HighsInt)j, (HighsInt)d};
+                    double val[2] = {1.0, 1.0};
+                    slack_highs.addRow(-kHighsInf, (double)b_u(j), 2, idx, val);
                 }
             }
-            build_polytope_from_highs(highs, tP);
-            return tP;
-        }
 
+            slack_highs.changeColCost(d, 1.0);
+            slack_highs.changeObjectiveSense(ObjSense::kMaximize);
+            slack_highs.run();
 
-    // Finds a point in the interior of P by maximizing a uniform slack variable against all bounds.
-    //
-    // The LP solved is the following:
-    //
-    // max y s.t. A_eq x = b_eq, b_l+y <= x <= b_u-y, 0 <= y <= 1
-    // Note: the point is stored in z
-    // @return true if a point with significant slack was found
-    bool find_interior_point()
-    {
-        const MT& A_eq = P.getEqualities();
-        const VT& b_eq = P.getEqualityBounds();
-        const VT& b_l = P.getLowerBounds();
-        const VT& b_u = P.getUpperBounds();
-        unsigned d = P.getDimension();
+            ++lp_stats.solves;
+            lp_stats.iterations += slack_highs.getInfo().simplex_iteration_count;
 
-        Highs slack_highs;
-        configure_highs(slack_highs, config);
-
-        for (unsigned j = 0; j < d; ++j) {
-            slack_highs.addVar(-kHighsInf, kHighsInf);
-        }
-        slack_highs.addVar(0.0, 1.0);
-
-        for (unsigned i = 0; i < (unsigned)A_eq.rows(); ++i) {
-            std::vector<HighsInt> indices;
-            std::vector<double> values;
-            for (typename MT::InnerIterator it(A_eq, i); it; ++it) {
-                indices.push_back((HighsInt)it.col());
-                values.push_back((double)it.value());
+            if (slack_highs.getModelStatus() != HighsModelStatus::kOptimal) {
+                ++lp_stats.failures;
+                return false;
             }
-            slack_highs.addRow((double)b_eq(i), (double)b_eq(i), indices.size(), indices.data(), values.data());
-        }
 
-        for (unsigned j = 0; j < d; ++j) {
-            if (!std::isinf((double)b_l(j))) {
-                HighsInt idx[2] = {(HighsInt)j, (HighsInt)d};
-                double val[2] = {1.0, -1.0};
-                slack_highs.addRow((double)b_l(j), kHighsInf, 2, idx, val);
+            report.interior_slack = slack_highs.getObjectiveValue();
+
+            if (report.interior_slack < config.interior_tolerance) {
+                return false;
             }
-            if (!std::isinf((double)b_u(j))) {
-                HighsInt idx[2] = {(HighsInt)j, (HighsInt)d};
-                double val[2] = {1.0, 1.0};
-                slack_highs.addRow(-kHighsInf, (double)b_u(j), 2, idx, val);
-            }
-        }
 
-        slack_highs.changeColCost(d, 1.0);
-        slack_highs.changeObjectiveSense(ObjSense::kMaximize);
-        slack_highs.run();
-
-        if (slack_highs.getModelStatus() != HighsModelStatus::kOptimal ||
-            slack_highs.getObjectiveValue() < config.interior_tolerance)
-            return false;
-
-        const auto& sol = slack_highs.getSolution().col_value;
-        z.resize(d);
-        for (unsigned j = 0; j < d; ++j)
-            z(j) = (typename VT::Scalar)sol[j];
-        
-        return true;
-    }
-
-    // Removes redundant inequalities from the representation using Clarkson's algorithm.
-    //
-    // The model starts with every inequality relaxed and gains them back one at a time
-    // as they are proved essential, so every LP is solved against the essential set I 
-    // found so far rather than the full set of inequalities, keeping the LP sizes at a minimum.
-    // @return the simplified polytope
-    MetabolicPolytope<Point> redundancy_removal_clarkson()
-    {
-        const NT INF = std::numeric_limits<NT>::infinity();
-        unsigned d = P.getDimension();
-        const VT& b_l = P.getLowerBounds();
-        const VT& b_u = P.getUpperBounds();
-
-        // Starts with all inequalities relaxed.
-        for (unsigned j = 0; j < d; ++j)
-            highs.changeColBounds((HighsInt)j, -kHighsInf, kHighsInf);
-
-        // Holds the inequalities with unknown redundancy status.
-        std::vector<Ineq> J;
-        std::vector<int> pos(2*d, -1);
-
-        auto J_insert_const = [&](Ineq c) {
-            pos[c.map()] = (int)J.size();
-            J.push_back(c);
-        };
-
-        auto J_erase_const = [&](Ineq c) {
-            int p = pos[c.map()];
-            if (p < 0) return false;
-
-            Ineq last = J.back();
-            J[p] = last;
-            pos[last.map()] = p;
-            J.pop_back();
-            pos[c.map()] = -1;
+            const auto& sol = slack_highs.getSolution().col_value;
+            z.resize(d);
+            for (unsigned j = 0; j < d; ++j)
+                z(j) = (typename VT::Scalar)sol[j];
+            
             return true;
-        };
-
-
-        for (unsigned k = 0; k < d; ++k) {
-            if (!std::isinf((double)b_l(k))) J_insert_const(Ineq{k, false});
-            if (!std::isinf((double)b_u(k))) J_insert_const(Ineq{k, true});
         }
 
-        std::vector<Ineq> I;
+        // Removes redundant inequalities from the representation using Clarkson's algorithm.
+        //
+        // The model starts with every inequality relaxed and gains them back one at a time
+        // as they are proved essential, so every LP is solved against the essential set I 
+        // found so far rather than the full set of inequalities, keeping the LP sizes at a minimum.
+        // @return the simplified polytope
+        MetabolicPolytope<Point> redundancy_removal_clarkson()
+        {
+            const NT INF = std::numeric_limits<NT>::infinity();
+            unsigned d = P.getDimension();
+            const VT& b_l = P.getLowerBounds();
+            const VT& b_u = P.getUpperBounds();
 
-        std::mt19937 rng(config.clarkson_seed);
-        std::vector<unsigned> fail_count(2*d, 0);
+            // Starts with all inequalities relaxed.
+            for (unsigned j = 0; j < d; ++j)
+                highs.changeColBounds((HighsInt)j, -kHighsInf, kHighsInf);
+
+            // Holds the inequalities with unknown redundancy status.
+            std::vector<Ineq> J;
+            std::vector<int> pos(2*d, -1);
+
+            auto J_insert_const = [&](Ineq c) {
+                pos[c.map()] = (int)J.size();
+                J.push_back(c);
+            };
+
+            auto J_erase_const = [&](Ineq c) {
+                int p = pos[c.map()];
+                if (p < 0) return false;
+
+                Ineq last = J.back();
+                J[p] = last;
+                pos[last.map()] = p;
+                J.pop_back();
+                pos[c.map()] = -1;
+                return true;
+            };
 
 
-        while (!J.empty()) {
-            // Picks constraints at random to make progress when LPs fail.
-            std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
-            Ineq k_ineq = J[pick(rng)];
+            for (unsigned k = 0; k < d; ++k) {
+                if (!std::isinf((double)b_l(k))) J_insert_const(Ineq{k, false});
+                if (!std::isinf((double)b_u(k))) J_insert_const(Ineq{k, true});
+            }
 
-            bool solved = false;
-            auto [is_redundant, x_star] = test_redundancy(k_ineq, solved);
+            std::vector<Ineq> I;
 
-            if (!solved) {
-                if (++fail_count[k_ineq.map()] > config.failed_iter_count) {
-                    I.insert(I.end(), J.begin(), J.end());
-                    break;
+            std::mt19937 rng(config.clarkson_seed);
+            std::vector<unsigned> fail_count(2*d, 0);
+
+
+            while (!J.empty()) {
+                // Picks constraints at random to make progress when LPs fail.
+                std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
+                Ineq k_ineq = J[pick(rng)];
+
+                bool solved = false;
+                auto [is_redundant, x_star] = test_redundancy(k_ineq, solved);
+
+                if (!solved) {
+                    if (++fail_count[k_ineq.map()] > config.failed_iter_count) {
+                        report.untested_bounds = (unsigned)J.size();
+                        I.insert(I.end(), J.begin(), J.end());
+                        break;
+                    }
+                    continue;
                 }
-                continue;
+
+                if (is_redundant) {
+                    J_erase_const(k_ineq);
+                    continue;
+                }
+
+                Ineq hit;
+                if (!ray_shoot(J, x_star-z, hit) || !J_erase_const(hit)) {
+                    I.push_back(k_ineq);
+                    enforce_ineq(k_ineq);
+                    J_erase_const(k_ineq);
+                } else {
+                    I.push_back(hit);
+                    enforce_ineq(hit);
+                }
             }
 
-            if (is_redundant) {
-                J_erase_const(k_ineq);
-                continue;
+            std::vector<bool> keep_lo(d, 0), keep_hi(d, 0);
+            for (Ineq const& in : I) {
+                if (in.is_upper) keep_hi[in.k] = true;
+                else keep_lo[in.k] = true;
             }
 
-            Ineq hit;
-            if (!ray_shoot(J, x_star-z, hit) || !J_erase_const(hit)) {
-                I.push_back(k_ineq);
-                enforce_ineq(k_ineq);
-                J_erase_const(k_ineq);
-            } else {
-                I.push_back(hit);
-                enforce_ineq(hit);
+            VT b_l_new(d), b_u_new(d);
+            for (unsigned j = 0; j < d; ++j) {
+                b_l_new(j) = keep_lo[j] ? b_l(j) : -INF;
+                b_u_new(j) = keep_hi[j] ? b_u(j) : INF;
             }
-        }
 
-        std::vector<bool> keep_lo(d, 0), keep_hi(d, 0);
-        for (Ineq const& in : I) {
-            if (in.is_upper) keep_hi[in.k] = true;
-            else keep_lo[in.k] = true;
+            return MetabolicPolytope<Point>(d, P.getEqualities(), b_l_new, b_u_new, 
+                                            P.getEqualityBounds());
         }
-
-        VT b_l_new(d), b_u_new(d);
-        for (unsigned j = 0; j < d; ++j) {
-            b_l_new(j) = keep_lo[j] ? b_l(j) : -INF;
-            b_u_new(j) = keep_hi[j] ? b_u(j) : INF;
-        }
-
-        return MetabolicPolytope<Point>(d, P.getEqualities(), b_l_new, b_u_new, 
-                                        P.getEqualityBounds());
-    }
 };
-
 #endif

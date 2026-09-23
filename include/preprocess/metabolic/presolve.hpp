@@ -14,7 +14,6 @@
 
 #include "cholmod.h"
 #include "SuiteSparseQR.hpp"
-
 #include <vector>
 #include "Eigen/Eigen"
 #include "Eigen/SparseCore"

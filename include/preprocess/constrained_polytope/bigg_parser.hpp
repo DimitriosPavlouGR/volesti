@@ -23,10 +23,10 @@
 // Parses a BiGG JSON model into a ConstrainedPolytope of the form:
 //
 //      A_eq x = b_eq  (steady-state condition S x = 0)
-//      A_in x <= b_in (flux bounds as inequality rows)
+//      lb <= x <= ub  (flux bounds)
 //
-// Each reaction becomes a variable, each metabolite an equality row, and 
-// each finite flux bound a row of A_in.
+// Each reaction becomes a variable, each metabolite an equality row. Flux
+// bounds are stored as bounds on x so A_in is empty.
 // @tparam Point the Point type used by the metabolic network
 // @param jsn a parsed nlohmann::json object holding the model
 // @return the metabolic network as a ConstrainedPolytope instance
@@ -59,31 +59,15 @@ ConstrainedPolytope<Point> construct_from_json(nlohmann::json const& jsn)
         }
     }
 
-    // Builds the stoichiometric matrix A_eq and the box bounds in A_in.
+    // Builds the stoichiometric matrix A_eq and the box bounds lb, ub.
     std::vector<Triplet> eq_triplets;
-    std::vector<Triplet> in_triplets;
-    std::vector<double> in_rhs;
+    VT lb(n), ub(n);
 
     unsigned j = 0;
-    unsigned in_row = 0;
 
     for (auto const& reaction : reactions) {
-        NT lo = reaction.contains("lower_bound") ? reaction.at("lower_bound").get<NT>() : -INF;
-        NT hi = reaction.contains("upper_bound") ? reaction.at("upper_bound").get<NT>() : INF;
-
-        // Upper bound x_j <= hi
-        if (std::isfinite((double)hi)) {
-            in_triplets.emplace_back(in_row, j, NT(1));
-            in_rhs.push_back((double)hi);
-            ++in_row;
-        }
-
-        // Lower bound -x_j <= -lo
-        if (std::isfinite((double)lo)) {
-            in_triplets.emplace_back(in_row, j, NT(-1));
-            in_rhs.push_back((double)-lo);
-            ++in_row;
-        }
+        lb(j) = reaction.contains("lower_bound") ? reaction.at("lower_bound").get<NT>() : -INF;
+        ub(j) = reaction.contains("upper_bound") ? reaction.at("upper_bound").get<NT>() : INF;
 
         // Stoichiometric coefficients.
         if (reaction.contains("metabolites")) {
@@ -106,13 +90,11 @@ ConstrainedPolytope<Point> construct_from_json(nlohmann::json const& jsn)
 
     VT b_eq = VT::Zero(m);
 
-    MT A_in(in_row, n);
-    A_in.setFromTriplets(in_triplets.begin(), in_triplets.end());
-    A_in.makeCompressed();
+    // No inequalities besides box bounds
+    MT A_in(0, n);
+    VT b_in(0);
 
-    VT b_in(in_row);
-    for (unsigned i = 0; i < in_row; ++i) b_in(i) = (NT)in_rhs[i];
-    return ConstrainedPolytope<Point>(n, A_eq, b_eq, A_in, b_in);
+    return ConstrainedPolytope<Point>(n, A_eq, b_eq, A_in, b_in, lb, ub);
 }
 
 // Parses the BiGG JSON model from a given file path.

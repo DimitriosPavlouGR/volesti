@@ -114,5 +114,26 @@ class ConstrainedPolytope {
 
         // @return the number of inequality constraints (rows of A_in)
         unsigned getNumInequalities() const { return (unsigned)A_in.rows(); }
+
+        // @return the number of finite entries in lb
+        unsigned getNumFiniteLowerBounds() const {
+            unsigned n = 0;
+            for (Eigen::Index j = 0; j < lb.size(); ++j)
+                if (std::isfinite((double)lb(j))) ++n;
+
+            return n;
+        }
+
+        // @return the number of finite entries in ub
+        unsigned getNumFiniteUpperBounds() const {
+            unsigned n = 0;
+            for (Eigen::Index j = 0; j < ub.size(); ++j)
+                if (std::isfinite((double)ub(j))) ++n;
+
+            return n;
+        }
+
+        // @return the number of finite entries in lb, ub
+        unsigned getNumFiniteBounds() const { return this->getNumFiniteLowerBounds()+this->getNumFiniteUpperBounds(); }
 };
 #endif

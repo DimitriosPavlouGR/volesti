@@ -37,11 +37,13 @@ struct InteriorPoint {
 //      max y
 //      s.t. A_eq x = b_eq
 //           A_in x + ||a_i|| y <= b_in(i) for every row i
+//           lb(j) + y <= x_j
+//           ub(j) + y >= x_j
 //           0 <= y <= 1
 //
 // @tparam Point the point type
 // @param P the polytope
-// @param tolerance the minimum slack for the point to count
+// @param tol the minimum slack for the point to count
 // @return the result, meaningful only if true is returned
 template <typename Point>
 InteriorPoint<typename ConstrainedPolytope<Point>::VT>
@@ -56,6 +58,8 @@ find_interior_point(ConstrainedPolytope<Point> const& P,
     VT const& b_eq = P.getEqualityRHS();
     MT const& A_in = P.getInequalities();
     VT const& b_in = P.getInequalityRHS();
+    VT const& lb = P.getLowerBounds();
+    VT const& ub = P.getUpperBounds();
     unsigned const d = P.getDimension();
     unsigned m_eq = P.getNumEqualities();
     unsigned m_in = P.getNumInequalities();
@@ -72,6 +76,7 @@ find_interior_point(ConstrainedPolytope<Point> const& P,
 
     // The slack variable
     highs.addVar(0.0, 1.0);
+    HighsInt const y = (HighsInt)d;
 
     // Adds the equality rows (no slack needed)
     for (unsigned i = 0; i < m_eq; ++i) {
@@ -107,6 +112,21 @@ find_interior_point(ConstrainedPolytope<Point> const& P,
         highs.addRow(-kHighsInf, (double)b_in(i), (HighsInt)ids.size(),
                      ids.data(), vals.data());
 
+    }
+
+    // Adds the box bounds, each with norm 1.
+    for (unsigned j = 0; j < d; ++j) {
+        HighsInt ids[2] = {(HighsInt)j, y};
+
+        if (std::isfinite((double)lb(j))) {
+            double vals[2] = {1.0, -1.0};
+            highs.addRow((double)lb(j), kHighsInf, 2, ids, vals);
+        }
+
+        if (std::isfinite((double)ub(j))) {
+            double vals[2] = {1.0, 1.0};
+            highs.addRow(-kHighsInf, (double)ub(j), 2, ids, vals);
+        }
     }
 
     // Maximizes the slack

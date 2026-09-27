@@ -14,6 +14,8 @@
 #include <random>
 #include <cmath>
 #include <vector>
+#include <limits>
+#include <utility>
 #include "Highs.h"
 #include "convex_bodies/constrained_polytope.hpp"
 #include "preprocess/constrained_polytope/highs_polytope.hpp"
@@ -74,9 +76,11 @@ struct ClarksonResult {
 template <typename Point>
 std::pair<typename ConstrainedPolytope<Point>::VT, bool>
 test_redundancy(Highs& highs, 
-                typename ConstrainedPolytope<Point>::MT const& A_in,
-                typename ConstrainedPolytope<Point>::VT const& b_in,
+                typename ConstrainedPolytope<Point>::MT const& A,
+                typename ConstrainedPolytope<Point>::VT const& b,
                 unsigned k,
+                unsigned m_in,
+                std::vector<std::pair<unsigned, bool>> const& bounds,
                 unsigned d,
                 ClarksonConfig const& config,
                 unsigned& solved_lps,
@@ -87,20 +91,39 @@ test_redundancy(Highs& highs,
     using VT = typename ConstrainedPolytope<Point>::VT;
     using MT = typename ConstrainedPolytope<Point>::MT;
 
-    // Temporarily adds the row.
-    std::vector<HighsInt> ids;
-    std::vector<double> vals;
-    for (typename MT::InnerIterator it(A_in, k); it; ++it) {
-        ids.push_back((HighsInt)it.col());
-        vals.push_back((double)it.value());
+    double const relaxed = (double)b(k)+config.relaxation_gap;
+    bool const is_bound = (k >= m_in);
+    HighsInt test_row = -1;
+
+    HighsInt col = 0;
+    double old_lo = 0.0;
+    double old_hi = 0.0;
+
+    if (is_bound) {
+        auto [j, is_upper] = bounds[k-m_in];
+        col = (HighsInt)j;
+        old_lo = highs.getLp().col_lower_[col];
+        old_hi = highs.getLp().col_upper_[col];
+
+        if (is_upper) {
+            highs.changeColBounds(col, old_lo, relaxed);
+        } else {
+            highs.changeColBounds(col, -relaxed, old_hi);
+        }
+    } else {
+        std::vector<HighsInt> ids;
+        std::vector<double> vals;
+
+        for (typename MT::InnerIterator it(A, k); it; ++it) {
+            ids.push_back((HighsInt)it.col());
+            vals.push_back((double)it.value());
+        }
+        highs.addRow(-kHighsInf, relaxed, (HighsInt)ids.size(), ids.data(), vals.data());
+        test_row = highs.getLp().num_row_-1;
     }
-    highs.addRow(-kHighsInf, (double)b_in(k)+config.relaxation_gap,
-                 (HighsInt)ids.size(), ids.data(), vals.data());
-    
-    int test_row = (int)highs.getLp().num_row_-1;
 
     // Maximizes the constraint
-    for (typename MT::InnerIterator it(A_in, k); it; ++it)
+    for (typename MT::InnerIterator it(A, k); it; ++it)
         highs.changeColCost((HighsInt)it.col(), (double)it.value());
     
     highs.changeObjectiveSense(ObjSense::kMaximize);
@@ -125,13 +148,18 @@ test_redundancy(Highs& highs,
         for (unsigned j = 0; j < d; ++j)
             x_star(j) = (NT)sol[j];
 
-        double ax = (double)A_in.row(k).dot(x_star);
-        redundant = (ax <= (double)b_in(k)+config.facet_tol);
+        double ax = (double)A.row(k).dot(x_star);
+        redundant = (ax <= (double)b(k)+config.facet_tol);
     }
 
-    // Restores the row
-    highs.deleteRows(test_row, test_row);
-    for (typename MT::InnerIterator it(A_in, k); it; ++it)
+    // Restores the model
+    if (is_bound) {
+        highs.changeColBounds(col, old_lo, old_hi);
+    } else {
+        highs.deleteRows(test_row, test_row);
+    }
+
+    for (typename MT::InnerIterator it(A, k); it; ++it)
         highs.changeColCost((HighsInt)it.col(), 0.0);
 
     return {x_star, redundant};
@@ -190,22 +218,74 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
     using NT = typename ConstrainedPolytope<Point>::NT;
     using VT = typename ConstrainedPolytope<Point>::VT;
     using MT = typename ConstrainedPolytope<Point>::MT;
+    using Triplet = typename ConstrainedPolytope<Point>::Triplet;
 
     auto const& A_eq = P.getEqualities();
     auto const& b_eq = P.getEqualityRHS();
     auto const& A_in = P.getInequalities();
     auto const& b_in = P.getInequalityRHS();
+    auto const& lb = P.getLowerBounds();
+    auto const& ub = P.getUpperBounds();
     unsigned const d = P.getDimension();
     unsigned const m_in = P.getNumInequalities();
+
+    // Stacks the finite bounds under A_in
+    std::vector<Triplet> triplets;
+    std::vector<NT> rhs;
+    std::vector<std::pair<unsigned, bool>> bounds;
+
+    for (unsigned i = 0; i < m_in; ++i) {
+        for (typename MT::InnerIterator it(A_in, i); it; ++it)
+            triplets.emplace_back((int)i, (int)it.col(), it.value());
+        rhs.push_back(b_in(i));
+    }
+
+    for (unsigned j = 0; j < d; ++j) {
+        if (std::isfinite((double)ub(j))) {
+            triplets.emplace_back((int)rhs.size(), (int)j, NT(1));
+            rhs.push_back(ub(j));
+            bounds.emplace_back(j, true);
+        } 
+        if (std::isfinite((double)lb(j))) {
+            triplets.emplace_back((int)rhs.size(), (int)j, NT(-1));
+            rhs.push_back(-lb(j));
+            bounds.emplace_back(j, false);
+        } 
+    }
+
+    unsigned const m = (unsigned)rhs.size();
+
+    MT A(m, d);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    VT b = Eigen::Map<VT const>(rhs.data(), m);
+
+    // Same polytope, but bounds are in A_in, b_in (useful for rayshooting)
+    ConstrainedPolytope<Point> Pc(d, A_eq, b_eq, A, b);
 
     ClarksonResult<Point> res;
 
     Highs highs;
     configure_highs(highs);
+    highs.setOptionValue("presolve", "off");
     build_clarkson_lp(P, highs);
 
     // Enforces row i by adding it permanetly to the HiGHS model
     auto enforce = [&](unsigned i) {
+        if (i >= m_in) {
+            auto [j, is_upper] = bounds[i-m_in];
+            double lo = highs.getLp().col_lower_[j];
+            double hi = highs.getLp().col_upper_[j];
+
+            if (is_upper) {
+                hi = (double)b(i);
+            } else {
+                lo = -(double)b(i);
+            }
+
+            highs.changeColBounds((HighsInt)j, lo, hi);
+            return;
+        }
+
         std::vector<HighsInt> ids;
         std::vector<double> vals;
 
@@ -220,7 +300,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
     std::vector<unsigned> J;
 
     // The position of row i in J, -1 if not in J
-    std::vector<int> pos(m_in, -1);
+    std::vector<int> pos(m, -1);
 
     auto J_insert = [&](unsigned i) {
         pos[i] = (int)J.size();
@@ -238,12 +318,12 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
         return true;
     };
 
-    for (unsigned i = 0; i < m_in; ++i)
+    for (unsigned i = 0; i < m; ++i)
         J_insert(i);
 
     std::vector<unsigned> I;
     std::mt19937 rng(config.seed);
-    std::vector<unsigned> fail_count(m_in, 0);
+    std::vector<unsigned> fail_count(m, 0);
 
     while (!J.empty()) {
         std::uniform_int_distribution<std::size_t> pick(0, J.size()-1);
@@ -251,7 +331,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
 
         bool solved = false;
         auto [x_star, redundant] = test_redundancy<Point>(
-            highs, A_in, b_in, k, d, config, res.solved_lps, res.retried_lps,
+            highs, A, b, k, m_in, bounds, d, config, res.solved_lps, res.retried_lps,
             solved);
 
         if (!solved) {
@@ -268,7 +348,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
             continue;
         }
 
-        RayShoot rs = ray_shoot(P, J, z, x_star-z, config.ray_tol);
+        RayShoot rs = ray_shoot(Pc, J, z, x_star-z, config.ray_tol);
 
         if (!rs.hit || !J_erase(rs.row)) {
             I.push_back(k);
@@ -280,29 +360,38 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
         }
     }
 
-    std::vector<bool> keep(m_in, false);
+    std::vector<bool> keep(m, false);
     for (unsigned i : I) keep[i] = true;
 
-    std::vector<typename ConstrainedPolytope<Point>::Triplet> triplets;
-    std::vector<double> rhs;
-    unsigned row_out = 0;
+    std::vector<Triplet> triplets_out;
+    std::vector<NT> rhs_out;
 
     for (unsigned i = 0; i < m_in; ++i) {
         if (!keep[i]) continue;
         for (typename MT::InnerIterator it(A_in, i); it; ++it) 
-            triplets.emplace_back((Eigen::Index)row_out, it.col(), it.value());
-        rhs.push_back((double)b_in(i));
-        ++row_out;
+            triplets_out.emplace_back((int)rhs_out.size(), (int)it.col(), it.value());
+        rhs_out.push_back(b_in(i));
     }
 
-    MT A_in_new(row_out, d);
-    A_in_new.setFromTriplets(triplets.begin(), triplets.end());
+    MT A_in_new((Eigen::Index)rhs_out.size(), d);
+    A_in_new.setFromTriplets(triplets_out.begin(), triplets_out.end());
+    VT b_in_new = Eigen::Map<VT const>(rhs_out.data(), (Eigen::Index)rhs_out.size());
 
-    VT b_in_new(row_out);
-    for (unsigned i = 0; i < row_out; ++i)
-        b_in_new(i) = (NT)rhs[i];
+    NT const INF = std::numeric_limits<NT>::infinity();
+    VT lb_new = VT::Constant(d, -INF);
+    VT ub_new = VT::Constant(d, INF);
 
-    res.polytope = ConstrainedPolytope<Point>(d, A_eq, b_eq, A_in_new, b_in_new);
+    for (unsigned i = m_in; i < m; ++i) {
+        if (!keep[i]) continue;
+        auto [j, is_upper] = bounds[i-m_in];
+        if (is_upper) {
+            ub_new(j) = ub(j);
+        } else {
+            lb_new(j) = lb(j);
+        }
+    }
+
+    res.polytope = ConstrainedPolytope<Point>(d, A_eq, b_eq, A_in_new, b_in_new, lb_new, ub_new);
     res.valid = true;
     return res;
 }

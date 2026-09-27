@@ -33,42 +33,40 @@ void benchmark(std::string const& model_path) {
               << "  n=" << P.getDimension()
               << "  m_eq=" << P.getNumEqualities()
               << "  m_in=" << P.getNumInequalities()
-              << std::flush;
+              << "  bounds=" << P.getNumFiniteBounds() << "\n" << std::flush;
 
     SimplifierConfig config;
-    config.fix_dimensions = true;
+    auto start = std::chrono::steady_clock::now();
 
+    // Stage 1: fix degenerate dimensions
     std::cout << "  stage 1..." << std::flush;
     auto rres = reduce_polytope(P, config.reduce);
-    std::cout << (rres.valid ? "ok" : "failed") << std::flush;
+    if (!rres.valid) { std::cout << "INFEASIBLE\n"; return; }
+    std::cout << "ok  fixed=" << rres.fixed_vars
+              << "  lps=" << rres.solved_lps << "\n" << std::flush;
 
+    // Stage 2: interior point of the reduced polytope
     std::cout << "  stage 2..." << std::flush;
     auto ip = find_interior_point(rres.polytope, config.interior_tol);
-    std::cout << (ip.valid ? "ok" : "failed") << std::flush;
+    std::cout << (ip.valid ? "ok" : "failed") << "  slack=" << ip.slack << "\n" << std::flush;
+    if (!ip.valid) return;
 
+    // Stage 3: Clarkson
     std::cout << "  stage 3..." << std::flush;
     auto cres = redundancy_removal_clarkson(rres.polytope, ip.point, config.clarkson);
-    std::cout << (cres.valid ? "ok" : "failed") << "\n" << std::flush;
+    if (!cres.valid) { std::cout << "failed\n"; return; }
 
-    auto start = std::chrono::steady_clock::now();
-    auto res   = simplify(P, config);
     double elapsed = std::chrono::duration<double>(
-                     std::chrono::steady_clock::now()-start).count();
+        std::chrono::steady_clock::now()-start).count();
 
-    switch (res.status) {
-        case SimplifierStatus::OK:
-            std::cout << "  ->  m_in=" << res.polytope.getNumInequalities()
-                      << "  removed=" << (P.getNumInequalities()-res.polytope.getNumInequalities())
-                      << "  lps=" << res.solved_lps
-                      << "  " << elapsed << "s\n";
-            break;
-        case SimplifierStatus::INFEASIBLE:
-            std::cout << "  INFEASIBLE\n"; break;
-        case SimplifierStatus::NO_INTERIOR_POINT:
-            std::cout << "  NO INTERIOR POINT\n"; break;
-        case SimplifierStatus::CLARKSON_FAILED:
-            std::cout << "  CLARKSON FAILED\n"; break;
-    }
+    Polytope const& out = cres.polytope;
+    std::cout << "ok\n"
+              << "  ->  m_eq=" << out.getNumEqualities()
+              << "  m_in=" << out.getNumInequalities()
+              << "  bounds=" << out.getNumFiniteBounds()
+              << "  removed=" << (P.getNumFiniteBounds()-out.getNumFiniteBounds())
+              << "  lps=" << (rres.solved_lps+cres.solved_lps)
+              << "  " << elapsed << "s\n" << std::flush;
 }
 
 int main() {

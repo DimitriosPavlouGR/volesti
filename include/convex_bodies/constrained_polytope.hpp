@@ -19,10 +19,11 @@
 #include <stdexcept>
 
 // This class describes a (generally not full dimensional) polytope defined by equality 
-// constraints and general inequality constraints:
+// constraints, general inequality constraints and bounds on variables:
 //
 //      A_eq x = b_eq
 //      A_in x <= b_in
+//      lb <= x <= ub
 //
 // @tparam Point Point type
 template <typename Point>
@@ -40,6 +41,8 @@ class ConstrainedPolytope {
         VT b_eq;     // equality rhs
         MT A_in;     // inequality matrix
         VT b_in;     // inequality rhs
+        VT lb;       // lower bounds on x
+        VT ub;       // upper bound on x
 
     public:
         // Default constructor.
@@ -51,11 +54,29 @@ class ConstrainedPolytope {
         // @param b_eq_ the equality rhs
         // @param A_in_ the inequality matrix
         // @param b_in_ the inequality rhs
+        // @param lb_ the lower bounds on x
+        // @param ub_ the upper bounds on x
+        ConstrainedPolytope(unsigned d_, 
+                          MT const& A_eq_, VT const& b_eq_, 
+                          MT const& A_in_,  VT const& b_in_,
+                          VT const& lb_, VT const& ub_
+        ) : 
+            d{d_}, A_eq{A_eq_}, b_eq{b_eq_}, A_in{A_in_}, b_in{b_in_}, lb{lb_}, ub{ub_}
+        {}
+
+        // Builds a polytope with equalities, general inequalities and no box bounds.
+        // @param d_ the ambient dimension
+        // @param A_eq_ the equality matrix, s.t. A_eq x = b_eq
+        // @param b_eq_ the equality rhs
+        // @param A_in_ the inequality matrix
+        // @param b_in_ the inequality rhs
         ConstrainedPolytope(unsigned d_, 
                           MT const& A_eq_, VT const& b_eq_, 
                           MT const& A_in_,  VT const& b_in_
         ) : 
-            d{d_}, A_eq{A_eq_}, b_eq{b_eq_}, A_in{A_in_}, b_in{b_in_}
+            ConstrainedPolytope(d_, A_eq_, b_eq_, A_in_, b_in_,
+                                VT::Constant(d_, -std::numeric_limits<NT>::infinity()),
+                                VT::Constant(d_, std::numeric_limits<NT>::infinity()))
         {}
 
         // Default copy constructor, copies all members.
@@ -75,6 +96,12 @@ class ConstrainedPolytope {
 
         // @return the inequality rhs
         VT const& getInequalityRHS() const { return this->b_in; }
+
+        // @return the lower bounds on x
+        VT const& getLowerBounds() const { return this->lb; }
+
+        // @return the upper bounds on x
+        VT const& getUpperBounds() const { return this->ub; }
 
         // @return true if the polytope has equality constraints
         bool hasEqualities() const { return A_eq.rows() > 0; }

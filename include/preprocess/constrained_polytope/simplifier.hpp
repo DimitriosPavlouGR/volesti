@@ -15,6 +15,7 @@
 #include "preprocess/constrained_polytope/reduce_polytope.hpp"
 #include "preprocess/constrained_polytope/interior_point.hpp"
 #include "preprocess/constrained_polytope/clarkson.hpp"
+#include "preprocess/constrained_polytope/optimizations.hpp"
 
 // Configuration for the simplification pipeline.
 struct SimplifierConfig {

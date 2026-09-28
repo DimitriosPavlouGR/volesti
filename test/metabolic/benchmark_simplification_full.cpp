@@ -45,15 +45,19 @@ void benchmark(std::string const& model_path) {
     std::cout << "ok  fixed=" << rres.fixed_vars
               << "  lps=" << rres.solved_lps << "\n" << std::flush;
 
+    auto dres = remove_dependent_rows(rres.polytope);
+    if (!dres.valid) { std::cout << "inconsistent, residual=" << dres.max_residual << "\n"; return; }
+    std::cout << "  rank=" << dres.rank << "  removed=" << dres.removed_rows << "\n";
+
     // Stage 2: interior point of the reduced polytope
     std::cout << "  stage 2..." << std::flush;
-    auto ip = find_interior_point(rres.polytope, config.interior_tol);
+    auto ip = find_interior_point(dres.polytope, config.interior_tol);
     std::cout << (ip.valid ? "ok" : "failed") << "  slack=" << ip.slack << "\n" << std::flush;
     if (!ip.valid) return;
 
     // Stage 3: Clarkson
     std::cout << "  stage 3..." << std::flush;
-    auto cres = redundancy_removal_clarkson(rres.polytope, ip.point, config.clarkson);
+    auto cres = redundancy_removal_clarkson(dres.polytope, ip.point, config.clarkson);
     if (!cres.valid) { std::cout << "failed\n"; return; }
 
     double elapsed = std::chrono::duration<double>(

@@ -36,11 +36,15 @@ void benchmark(std::string const& model_path) {
               << "  bounds=" << P.getNumFiniteBounds() << "\n" << std::flush;
 
     SimplifierConfig config;
+    config.clarkson.seed = 1;
     auto start = std::chrono::steady_clock::now();
     SimplifierResult res = simplify(P, config);
     double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now()-start).count();
-
+    
+    if (res.status != SimplifierStatus::OK) {
+        std::cout << "failed (status " << (int)res.status <<") " << ela
+    }
     Polytope const& out = res.polytope;
     std::cout << "ok\n"
               << "  ->  m_eq=" << out.getNumEqualities()

@@ -36,7 +36,7 @@ struct ClarksonConfig {
     unsigned failed_iter_count = 2;
 
     // The seed for the random row picker.
-    unsigned seed = 0;
+    unsigned seed = 1;
 };
 
 // Stores the result of Clarkson's algorithm.

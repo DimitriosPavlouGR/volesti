@@ -67,7 +67,7 @@ find_interior_point(ConstrainedPolytope<Point> const& P,
     InteriorPoint<VT> ip;
 
     Highs highs;
-    highs.setOptionValue("output_flag", true);
+    highs.setOptionValue("output_flag", false);
     highs.setOptionValue("presolve", "on");
 
     // The original variables.

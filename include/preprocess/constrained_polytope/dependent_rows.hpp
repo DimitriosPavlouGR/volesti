@@ -8,8 +8,8 @@
 
 // Licensed under GNU LGPL.3, see LICENCE file
 
-#ifndef OPTIMIZATION_HPP
-#define OPTIMIZATION_HPP
+#ifndef CONSTRAINED_POLYTOPE_DEPENDENT_ROWS_HPP
+#define CONSTRAINED_POLYTOPE_DEPENDENT_ROWS_HPP
 
 #include <algorithm>
 #include <cmath>
@@ -151,7 +151,68 @@ namespace dependent_rows_removal_util {
         if (x.size() == 0) throw std::runtime_error("min_norm_solution: SPQR failed");
         return x;
     }
-}
+
+    // Returns an orthonormal basis of the nullspace A.
+    // @param A the matrix
+    // @param tol the rank tolerance
+    // @param cc the CHOLMOD workspace
+    // @param rank receives the rank of A
+    // @return the d x (d-rank) nullspace basis
+    inline Eigen::MatrixXd nullspace_basis(Eigen::SparseMatrix<double> const& A,
+                                        double tol,
+                                        cholmod_common* cc,
+                                        unsigned& rank)
+    {
+        int64_t const d = A.cols();
+        cholmod_sparse* At = eigen_to_cholmod(A.transpose(), cc);
+
+        SuiteSparseQR_factorization<double>* QR = SuiteSparseQR_factorize<double>(
+            SPQR_ORDERING_DEFAULT, tol, At, cc);
+
+        if (!QR) {
+            cholmod_l_free_sparse(&At, cc);
+            throw std::runtime_error("nullspace_basis: SPQR factorization failed");
+        }
+
+        int64_t const r = QR->rank;
+        int64_t const k = d-r;
+        rank = (unsigned)r;
+
+        Eigen::MatrixXd N(d, k);
+
+        if (k > 0) {
+            cholmod_dense* X = cholmod_l_allocate_dense((size_t)d, (size_t)k, (size_t)d,
+                                                        CHOLMOD_REAL, cc);
+
+            if (!X) {
+                SuiteSparseQR_free<double>(&QR, cc);
+                cholmod_l_free_sparse(&At, cc);
+                throw std::runtime_error("nullspace_basis: cholmod_l_allocate_dense failed");
+            }
+
+            double* Xx = (double*)X->x;
+            std::fill(Xx, Xx+d*k, 0.0);
+            for (int64_t c = 0; c < k; ++c)
+                Xx[c*d+(r+c)] = 1.0;
+
+            cholmod_dense* Y = SuiteSparseQR_qmult<double>(SPQR_QX, QR, X, cc);
+            cholmod_l_free_dense(&X, cc);
+
+            if (!Y) {
+                SuiteSparseQR_free<double>(&QR, cc);
+                cholmod_l_free_sparse(&At, cc);
+                throw std::runtime_error("nullspace_basis: SPQR qmult failed");
+            }
+
+            std::copy((double*)Y->x, (double*)Y->x+d*k, N.data());
+            cholmod_l_free_dense(&Y, cc);
+        }
+
+        SuiteSparseQR_free<double>(&QR, cc);
+        cholmod_l_free_sparse(&At, cc);
+        return N;
+    }
+};
 
 // Removes the linearly dependent rows of A_eq x = b_eq.
 //

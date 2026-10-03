@@ -421,30 +421,10 @@ add_test(NAME test_small_lp COMMAND test_highs -tc=test_small_lp)
 add_test(NAME test_infeasible_lp COMMAND test_highs -tc=test_infeasible_lp)  
 add_test(NAME test_unbounded_lp COMMAND test_highs -tc=test_unbounded_lp)  
 add_test(NAME test_max_inner_ball_lp COMMAND test_highs -tc=max_inner_ball_lp)  
-
-add_executable(test_metabolic_polytope metabolic/test_metabolic_polytope.cpp $<TARGET_OBJECTS:test_main>)
-target_include_directories(test_metabolic_polytope PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME test_construction COMMAND test_metabolic_polytope -tc=test_construction)                    
-target_compile_definitions(test_metabolic_polytope PRIVATE BIGG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bigg")
-
-add_executable(test_simplification metabolic/test_simplification.cpp $<TARGET_OBJECTS:test_main>)
-target_include_directories(test_simplification PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME test_no_change COMMAND test_simplification -tc=test_no_change)                    
-add_test(NAME test_no_dimension_fixing COMMAND test_simplification -tc=test_no_dimension_fixing)     
-add_test(NAME test_dimension_fixing COMMAND test_simplification -tc=test_dimension_fixing)
-
-add_executable(test_transformation metabolic/test_transformation.cpp $<TARGET_OBJECTS:test_main>)
-target_include_directories(test_transformation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME test_cube_transformation COMMAND test_transformation -tc=test_cube_transformation)                    
-add_test(NAME test_simplex_transformation COMMAND test_transformation -tc=test_simplex_transformation)    
-
-add_executable(benchmark_simplification metabolic/benchmark_simplification.cpp)
+   
+add_executable(benchmark_simplification benchmark_simplification.cpp)
 target_include_directories(benchmark_simplification PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(benchmark_simplification PRIVATE BIGG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bigg")
-
-add_executable(benchmark_simplification_full metabolic/benchmark_simplification_full.cpp)
-target_include_directories(benchmark_simplification_full PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_definitions(benchmark_simplification_full PRIVATE BIGG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bigg")
 
 add_executable(test_solve_lp lp_oracles/test_solve_lp.cpp $<TARGET_OBJECTS:test_main>)
 target_include_directories(test_solve_lp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -461,10 +441,6 @@ target_include_directories(test_zpolyoracles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 add_test(NAME test_z_membership COMMAND test_zpolyoracles -tc=test_z_membership)
 add_test(NAME test_z_line_intersection COMMAND test_zpolyoracles -tc=testz_line_intersection)
 
-add_executable(test_scaling metabolic/test_scaling.cpp $<TARGET_OBJECTS:test_main>)
-target_include_directories(test_scaling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-add_test(NAME test_no_scaling COMMAND test_scaling -tc=test_no_scaling)
-add_test(NAME test_scaling COMMAND test_scaling -tc=test_scaling)
 
 set(ADDITIONAL_FLAGS "-march=native -DSIMD_LEN=0 -DTIME_KEEPING")
 
@@ -513,11 +489,7 @@ find_package(LAPACK REQUIRED)
 find_package(BLAS REQUIRED)
 TARGET_LINK_LIBRARIES(full_dimensional_polytope_test highs::highs ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_highs highs::highs coverage_config)
-TARGET_LINK_LIBRARIES(test_metabolic_polytope highs::highs nlohmann_json::nlohmann_json coverage_config)
-TARGET_LINK_LIBRARIES(test_simplification highs::highs coverage_config)
-TARGET_LINK_LIBRARIES(test_transformation highs::highs ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(benchmark_simplification highs::highs nlohmann_json::nlohmann_json QD_LIB ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_solve_lp highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_vpolyoracles highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_zpolyoracles highs::highs coverage_config)
-TARGET_LINK_LIBRARIES(test_scaling coverage_config)

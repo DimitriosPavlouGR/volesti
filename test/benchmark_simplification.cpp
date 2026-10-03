@@ -18,6 +18,7 @@
 #include "preprocess/constrained_polytope/bigg_parser.hpp"
 #include "preprocess/constrained_polytope/simplifier.hpp"
 #include "preprocess/constrained_polytope/transformation.hpp"
+#include "preprocess/constrained_polytope/simplification_exporter.hpp"
 
 typedef double NT;
 typedef Cartesian<NT> Kernel;
@@ -26,7 +27,7 @@ typedef ConstrainedPolytope<Point> Polytope;
 
 static std::filesystem::path const EXPORT_DIR = "simplified_constrained";
 
-void benchmark(std::string const& model_path) {
+void benchmark(std::string const& model_path, std::filesystem::path const& export_dir) {
     Polytope P = parse_from_json<Point>(model_path);
 
     std::string name = std::filesystem::path(model_path).stem().string();
@@ -38,30 +39,38 @@ void benchmark(std::string const& model_path) {
               << "  finite bounds=" << P.getNumFiniteBounds() << std::endl;
 
     SimplifierConfig config;
-    
-    std::clock_t c0 = std::clock();
-    auto res = simplify(P, config);
-    std::clock_t c1 = std::clock();
 
-    double cpu_t = double(c1-c0)/CLOCKS_PER_SEC;
+    auto res = simplify(P, config);
 
     if (res.status != SimplifierStatus::OK) {
-        std::cout << "failed with status=" << (int)res.status << ", " << cpu_t << std::endl;
+        std::cout << "failed with status=" << (int)res.status << ", " << res.times.total() << std::endl;
+        return;
     }
+
     Polytope const& Ps = res.polytope;
     std::cout << "ok"
               << "  -> m_eq=" << Ps.getNumEqualities()
               << "  m_in=" << Ps.getNumInequalities()
               << "  finite bounds=" << Ps.getNumFiniteBounds()
               << "  removed=" << (P.getNumFiniteBounds()-Ps.getNumFiniteBounds())
-              << "  " << cpu_t << std::endl; 
+              << "  " << res.times.total() << std::endl; 
 
-    auto trans = transform(P);
+    // Grabs the full dimensional polytope
+    std::clock_t c0 = std::clock();
+    auto [HP, shift, N] = transform(Ps);
+    std::clock_t c1 = std::clock();
+    double trans_t = double(c1-c0)/CLOCKS_PER_SEC;
+
+    std::filesystem::path export_path = export_dir/(name+"_clarkson.json");
+    export_to_json(export_path.string(), name, P, res, HP, N, shift, trans_t);
+
+    std::cout << "  exported to " << export_path.string() << std::endl;
 }
 
 int main() {
-    std::vector<std::filesystem::path> models;
+    std::filesystem::create_directories(EXPORT_DIR);
 
+    std::vector<std::filesystem::path> models;
     for (auto const& file : std::filesystem::directory_iterator(BIGG_DIR)) {
         if (file.path().extension() != ".json") continue;
         models.push_back(file.path());
@@ -70,7 +79,7 @@ int main() {
     std::sort(models.begin(), models.end());
 
     for (auto const& model : models)
-        benchmark(model.string());
+        benchmark(model.string(), EXPORT_DIR);
 
     return 0;
 }

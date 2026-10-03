@@ -23,7 +23,7 @@ struct ReduceConfig {
     double reduce_tol = 1e-7;
 
     // Observed variation below this is treated as zero.
-    double observe_tol = 1e-6;
+    double observe_tol = 1e-5;
 };
 
 // Result of reducing a polytope

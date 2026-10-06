@@ -72,6 +72,12 @@ transform(ConstrainedPolytope<Point> const& P) {
         }
     }
 
+    // Without equalities the polytope is full dimensional
+    if (A_eq.rows() == 0) {
+        HPolytope<Point> HP(d, A, b);
+        return std::make_tuple(HP, VT(VT::Zero(d)), DenseMT(DenseMT::Identity(d,d)));
+    }
+    
     auto [A_full, b_full, shift, N] = compute_full_dimensional_polytope<NT, MTColMajor, DenseMT, VT>(
         A_eq, 
         b_eq, 

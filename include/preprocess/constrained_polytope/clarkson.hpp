@@ -12,6 +12,7 @@
 #define CLARKSON_HPP
 
 #include <random>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 #include <limits>
@@ -67,6 +68,8 @@ struct ClarksonResult {
 // @param A_in the inequality matrix
 // @param b_in the inequality rhs
 // @param k the row to test
+// @param m_eq number of equalities
+// @param m_in number of inequalities
 // @param d the number of variables
 // @param config the Clarkson configuration
 // @param solved_lps counter incremented for every HiGHS run
@@ -79,6 +82,7 @@ test_redundancy(Highs& highs,
                 typename ConstrainedPolytope<Point>::MT const& A,
                 typename ConstrainedPolytope<Point>::VT const& b,
                 unsigned k,
+                unsigned m_eq,
                 unsigned m_in,
                 std::vector<std::pair<unsigned, bool>> const& bounds,
                 unsigned d,
@@ -95,31 +99,26 @@ test_redundancy(Highs& highs,
     bool const is_bound = (k >= m_in);
     HighsInt test_row = -1;
 
-    HighsInt col = 0;
+    HighsInt index = 0;
     double old_lo = 0.0;
     double old_hi = 0.0;
 
     if (is_bound) {
         auto [j, is_upper] = bounds[k-m_in];
-        col = (HighsInt)j;
-        old_lo = highs.getLp().col_lower_[col];
-        old_hi = highs.getLp().col_upper_[col];
+        index = (HighsInt)j;
+        old_lo = highs.getLp().col_lower_[index];
+        old_hi = highs.getLp().col_upper_[index];
 
         if (is_upper) {
-            highs.changeColBounds(col, old_lo, relaxed);
+            highs.changeColBounds(index, old_lo, relaxed);
         } else {
-            highs.changeColBounds(col, -relaxed, old_hi);
+            highs.changeColBounds(index, -relaxed, old_hi);
         }
     } else {
-        std::vector<HighsInt> ids;
-        std::vector<double> vals;
-
-        for (typename MT::InnerIterator it(A, k); it; ++it) {
-            ids.push_back((HighsInt)it.col());
-            vals.push_back((double)it.value());
-        }
-        highs.addRow(-kHighsInf, relaxed, (HighsInt)ids.size(), ids.data(), vals.data());
-        test_row = highs.getLp().num_row_-1;
+        index = (HighsInt)(m_eq+k);
+        old_lo = highs.getLp().row_lower_[index];
+        old_hi = highs.getLp().row_upper_[index];
+        highs.changeRowBounds(index, -kHighsInf, relaxed);
     }
 
     // Maximizes the constraint
@@ -149,14 +148,15 @@ test_redundancy(Highs& highs,
             x_star(j) = (NT)sol[j];
 
         double ax = (double)A.row(k).dot(x_star);
-        redundant = (ax <= (double)b(k)+config.facet_tol);
+        double const obj = highs.getObjectiveValue();
+        redundant = (std::max(ax, obj)) <= (double)b(k)+config.facet_tol;
     }
 
     // Restores the model
     if (is_bound) {
-        highs.changeColBounds(col, old_lo, old_hi);
+        highs.changeColBounds(index, old_lo, old_hi);
     } else {
-        highs.deleteRows(test_row, test_row);
+        highs.changeRowBounds(index, old_lo, old_hi);
     }
 
     for (typename MT::InnerIterator it(A, k); it; ++it)
@@ -181,6 +181,8 @@ void build_clarkson_lp(ConstrainedPolytope<Point> const& P, Highs& highs)
     auto const& A_eq = P.getEqualities();
     auto const& b_eq = P.getEqualityRHS();
     unsigned const d = P.getDimension();
+    auto const& A_in = P.getInequalities();
+    unsigned const m_in = P.getNumInequalities();
     unsigned const m_eq = P.getNumEqualities();
 
     for (unsigned j = 0; j < d; ++j)
@@ -195,6 +197,18 @@ void build_clarkson_lp(ConstrainedPolytope<Point> const& P, Highs& highs)
         }
 
         highs.addRow((double)b_eq(i), (double)b_eq(i), (HighsInt)ids.size(),
+                     ids.data(), vals.data());
+    }
+
+    for (unsigned i = 0; i < m_in; ++i) {
+        std::vector<HighsInt> ids;
+        std::vector<double> vals;
+        for (typename MT::InnerIterator it(A_in, i); it; ++it) {
+            ids.push_back((HighsInt)it.col());
+            vals.push_back((double)it.value());
+        }
+
+        highs.addRow(-kHighsInf, kHighsInf, (HighsInt)ids.size(),
                      ids.data(), vals.data());
     }
 }
@@ -227,6 +241,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
     auto const& lb = P.getLowerBounds();
     auto const& ub = P.getUpperBounds();
     unsigned const d = P.getDimension();
+    unsigned const m_eq = P.getNumEqualities();
     unsigned const m_in = P.getNumInequalities();
 
     // Stacks the finite bounds under A_in
@@ -286,14 +301,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
             return;
         }
 
-        std::vector<HighsInt> ids;
-        std::vector<double> vals;
-
-        for (typename MT::InnerIterator it(A_in, i); it; ++it) {
-            ids.push_back((HighsInt)it.col());
-            vals.push_back((double)it.value());
-        }
-        highs.addRow(-kHighsInf, (double)b_in(i), (HighsInt)ids.size(), ids.data(), vals.data());
+        highs.changeRowBounds((HighsInt)(m_eq+i), -kHighsInf, (double)b_in(i));
     };
 
     // The candidate rows whose redundancy is unknown
@@ -331,7 +339,7 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
 
         bool solved = false;
         auto [x_star, redundant] = test_redundancy<Point>(
-            highs, A, b, k, m_in, bounds, d, config, res.solved_lps, res.retried_lps,
+            highs, A, b, k, m_eq, m_in, bounds, d, config, res.solved_lps, res.retried_lps,
             solved);
 
         if (!solved) {

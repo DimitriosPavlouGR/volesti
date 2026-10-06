@@ -426,6 +426,10 @@ add_executable(benchmark_simplification benchmark_simplification.cpp)
 target_include_directories(benchmark_simplification PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(benchmark_simplification PRIVATE BIGG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/bigg")
 
+add_executable(benchmark_simplification_netlib benchmark_simplification_netlib.cpp)
+target_include_directories(benchmark_simplification_netlib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(benchmark_simplification_netlib PRIVATE NETLIB_DIR="${CMAKE_CURRENT_SOURCE_DIR}/netlib_files")
+
 add_executable(test_solve_lp lp_oracles/test_solve_lp.cpp $<TARGET_OBJECTS:test_main>)
 target_include_directories(test_solve_lp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_chebychev_cube COMMAND test_solve_lp -tc=test_chebychev_cube)
@@ -440,7 +444,6 @@ add_executable(test_zpolyoracles lp_oracles/test_zpolyoracles.cpp $<TARGET_OBJEC
 target_include_directories(test_zpolyoracles PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME test_z_membership COMMAND test_zpolyoracles -tc=test_z_membership)
 add_test(NAME test_z_line_intersection COMMAND test_zpolyoracles -tc=testz_line_intersection)
-
 
 set(ADDITIONAL_FLAGS "-march=native -DSIMD_LEN=0 -DTIME_KEEPING")
 
@@ -490,6 +493,7 @@ find_package(BLAS REQUIRED)
 TARGET_LINK_LIBRARIES(full_dimensional_polytope_test highs::highs ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_highs highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(benchmark_simplification highs::highs nlohmann_json::nlohmann_json QD_LIB ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
+TARGET_LINK_LIBRARIES(benchmark_simplification_netlib highs::highs nlohmann_json::nlohmann_json QD_LIB ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_solve_lp highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_vpolyoracles highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_zpolyoracles highs::highs coverage_config)

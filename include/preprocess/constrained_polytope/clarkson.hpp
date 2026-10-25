@@ -97,7 +97,6 @@ test_redundancy(Highs& highs,
 
     double const relaxed = (double)b(k)+config.relaxation_gap;
     bool const is_bound = (k >= m_in);
-    HighsInt test_row = -1;
 
     HighsInt index = 0;
     double old_lo = 0.0;
@@ -377,6 +376,142 @@ ClarksonResult<Point> redundancy_removal_clarkson(ConstrainedPolytope<Point> con
     for (unsigned i = 0; i < m_in; ++i) {
         if (!keep[i]) continue;
         for (typename MT::InnerIterator it(A_in, i); it; ++it) 
+            triplets_out.emplace_back((int)rhs_out.size(), (int)it.col(), it.value());
+        rhs_out.push_back(b_in(i));
+    }
+
+    MT A_in_new((Eigen::Index)rhs_out.size(), d);
+    A_in_new.setFromTriplets(triplets_out.begin(), triplets_out.end());
+    VT b_in_new = Eigen::Map<VT const>(rhs_out.data(), (Eigen::Index)rhs_out.size());
+
+    NT const INF = std::numeric_limits<NT>::infinity();
+    VT lb_new = VT::Constant(d, -INF);
+    VT ub_new = VT::Constant(d, INF);
+
+    for (unsigned i = m_in; i < m; ++i) {
+        if (!keep[i]) continue;
+        auto [j, is_upper] = bounds[i-m_in];
+        if (is_upper) {
+            ub_new(j) = ub(j);
+        } else {
+            lb_new(j) = lb(j);
+        }
+    }
+
+    res.polytope = ConstrainedPolytope<Point>(d, A_eq, b_eq, A_in_new, b_in_new, lb_new, ub_new);
+    res.valid = true;
+    return res;
+}
+
+// The naive method only used for benchmarking.
+// @tparam Point the point type
+// @param P the polytope
+// @param config the configuration
+// @return the result
+template <typename Point>
+ClarksonResult<Point> redundancy_removal_naive(ConstrainedPolytope<Point> const& P,
+                                               ClarksonConfig const& config = ClarksonConfig{})
+{
+    using NT = typename ConstrainedPolytope<Point>::NT;
+    using VT = typename ConstrainedPolytope<Point>::VT;
+    using MT = typename ConstrainedPolytope<Point>::MT;
+    using Triplet = typename ConstrainedPolytope<Point>::Triplet;
+
+    auto const& A_eq = P.getEqualities();
+    auto const& b_eq = P.getEqualityRHS();
+    auto const& A_in = P.getInequalities();
+    auto const& b_in = P.getInequalityRHS();
+    auto const& lb = P.getLowerBounds();
+    auto const& ub = P.getUpperBounds();
+    unsigned const d = P.getDimension();
+    unsigned const m_eq = P.getNumEqualities();
+    unsigned const m_in = P.getNumInequalities();
+
+    // We stack the finite bounds with Ax <= b bounds
+    std::vector<Triplet> triplets;
+    std::vector<NT> rhs;
+    std::vector<std::pair<unsigned, bool>> bounds;
+
+    for (unsigned i = 0; i < m_in; ++i) {
+        for (typename MT::InnerIterator it(A_in, i); it; ++it)
+            triplets.emplace_back((int)i, (int)it.col(), it.value());
+        rhs.push_back(b_in(i));
+    }
+
+    for (unsigned j = 0; j < d; ++j) {
+        if (std::isfinite((double)ub(j))) {
+            triplets.emplace_back((int)rhs.size(), (int)j, NT(1));
+            rhs.push_back(ub(j));
+            bounds.emplace_back(j, true);
+        }
+        if (std::isfinite((double)lb(j))) {
+            triplets.emplace_back((int)rhs.size(), (int)j, NT(-1));
+            rhs.push_back(-lb(j));
+            bounds.emplace_back(j, false);
+        }
+    }
+
+    unsigned const m = (unsigned)rhs.size();
+
+    MT A(m, d);
+    A.setFromTriplets(triplets.begin(), triplets.end());
+    VT b = Eigen::Map<VT const>(rhs.data(), m);
+
+    ClarksonResult<Point> res;
+
+    Highs highs;
+    configure_highs(highs);
+    highs.setOptionValue("presolve", "off");
+    build_clarkson_lp(P, highs);
+
+    // Sets candidate constraint i on or off through its bounds
+    auto set_active = [&](unsigned i, bool on) {
+        if (i >= m_in) {
+            auto [j, is_upper] = bounds[i-m_in];
+            double lo = highs.getLp().col_lower_[j];
+            double hi = highs.getLp().col_upper_[j];
+
+            if (is_upper) {
+                hi = on ? (double)b(i) : kHighsInf;
+            } else {
+                lo = on ? -(double)b(i) : -kHighsInf;
+            }
+
+            highs.changeColBounds((HighsInt)j, lo, hi);
+            return;
+        }
+
+        highs.changeRowBounds((HighsInt)(m_eq+i), -kHighsInf, on ? (double)b_in(i) : kHighsInf);
+    };
+
+    for (unsigned i = 0; i < m; ++i)
+        set_active(i, true);
+
+    std::vector<bool> keep(m, true);
+
+    for (unsigned k = 0; k < m; ++k) {
+        bool solved = false;
+        auto [x_star, redundant] = test_redundancy<Point>(highs, A, b, k, m_eq, m_in, bounds, d, config, 
+                                                          res.solved_lps, res.retried_lps, solved);
+
+        // A failed LP keeps the candidate untested
+        if (!solved) {
+            ++res.untested_rows;
+            continue;
+        }
+
+        if (redundant) {
+            keep[k] = false;
+            set_active(k, false);
+        }
+    }
+
+    std::vector<Triplet> triplets_out;
+    std::vector<NT> rhs_out;
+
+    for (unsigned i = 0; i < m_in; ++i) {
+        if (!keep[i]) continue;
+        for (typename MT::InnerIterator it(A_in, i); it; ++it)
             triplets_out.emplace_back((int)rhs_out.size(), (int)it.col(), it.value());
         rhs_out.push_back(b_in(i));
     }

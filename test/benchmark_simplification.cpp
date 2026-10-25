@@ -25,9 +25,7 @@ typedef Cartesian<NT> Kernel;
 typedef typename Kernel::Point Point;
 typedef ConstrainedPolytope<Point> Polytope;
 
-static std::filesystem::path const EXPORT_DIR = "simplified_constrained";
-
-void benchmark(std::string const& model_path, std::filesystem::path const& export_dir) {
+void benchmark(std::string const& model_path, std::filesystem::path const& export_dir, RedundancyMethod method, std::string suffix) {
     Polytope P = parse_from_json<Point>(model_path);
 
     std::string name = std::filesystem::path(model_path).stem().string();
@@ -39,7 +37,7 @@ void benchmark(std::string const& model_path, std::filesystem::path const& expor
               << "  finite bounds=" << P.getNumFiniteBounds() << std::endl;
 
     SimplifierConfig config;
-
+    config.redundancy = method;
     auto res = simplify(P, config);
 
     if (res.status != SimplifierStatus::OK) {
@@ -61,14 +59,20 @@ void benchmark(std::string const& model_path, std::filesystem::path const& expor
     std::clock_t c1 = std::clock();
     double trans_t = double(c1-c0)/CLOCKS_PER_SEC;
 
-    std::filesystem::path export_path = export_dir/(name+"_clarkson.json");
+    std::filesystem::path export_path = export_dir/(name+suffix+".json");
     export_to_json(export_path.string(), name, P, res, HP, N, shift, trans_t);
 
     std::cout << "  exported to " << export_path.string() << std::endl;
 }
 
-int main() {
-    std::filesystem::create_directories(EXPORT_DIR);
+int main(int argc, char** argv) {
+    bool const naive = (argc > 1 && std::string(argv[1]) == "naive");
+
+    RedundancyMethod const method = naive ? RedundancyMethod::NAIVE : RedundancyMethod::CLARKSON;
+    std::string suffix = naive ? "_naive" : "_clarkson";
+    std::filesystem::path const export_dir = naive ? "simplified_naive" : "simplified_constrained";
+
+    std::filesystem::create_directories(export_dir);
 
     std::vector<std::filesystem::path> models;
     for (auto const& file : std::filesystem::directory_iterator(BIGG_DIR)) {
@@ -79,7 +83,7 @@ int main() {
     std::sort(models.begin(), models.end());
 
     for (auto const& model : models)
-        benchmark(model.string(), EXPORT_DIR);
+        benchmark(model.string(), export_dir, method, suffix);
 
     return 0;
 }

@@ -19,11 +19,20 @@
 #include "preprocess/constrained_polytope/clarkson.hpp"
 #include "preprocess/constrained_polytope/presolve.hpp"
 
+// The method used to remove redundant inequalities.
+enum class RedundancyMethod {
+    // Clarkson's algorithm, output sensitive and faster.
+    CLARKSON,
+
+    // The naive method, solves one large LP per bound.
+    NAIVE
+};
+
 // Configuration for the simplification pipeline.
 struct SimplifierConfig {
     // Configuration for dimension fixing.
     ReduceConfig reduce;
-
+    
     // Configuration for dependent row removal.
     DependentRowsRemovalConfig dependent_rows;
 
@@ -34,7 +43,7 @@ struct SimplifierConfig {
     double interior_tol = 1e-9;
 
     // Tracks if the reducer should be executed.
-    bool fix_dimensions = true;
+    bool reduce_polytope = true;
 
     // Tracks if presolve should happen.
     bool presolve = true;
@@ -42,10 +51,8 @@ struct SimplifierConfig {
     // Tracks if dependent rows should be removed.
     bool remove_dependent_rows = true;
 
-    // The maximum number of polytope reduction passes. When
-    // no interior point is found after a pass, dimension fixing
-    // is attempted again.
-    unsigned max_reduction_passes = 2;
+    // The method to use in the redundancy removal stage.
+    RedundancyMethod redundancy = RedundancyMethod::CLARKSON;
 };
 
 // The outcome of a simplification run.
@@ -83,11 +90,14 @@ struct PresolveStats {
 
 // Statistics about the reduce stage.
 struct ReduceStats {
-    // The number of passes.
-    unsigned passes = 0;
+    // The number of implicit rows.
+    unsigned implicit_rows = 0;
 
     // The number of variables fixed.
     unsigned fixed_vars = 0;
+
+    // The number of LPs retried.
+    unsigned retried_lps = 0;
 
     // The number of LPs solved.
     unsigned solved_lps = 0;
@@ -153,7 +163,7 @@ struct SimplifierResult {
 //
 // Pipeline:
 //      1. presolve_pinned_vars, frees bounds of variables pinned by A_eq x = b_eq
-//      2. reduce_polytope, fixes degenerate dimensions
+//      2. reduce_polytope, moves rows and bounds that hold with equality into A_eq
 //      3. remove_dependent_rows, removes dependent rows
 //      4. find_interior_point, finds a strictly interior point
 //      5. redundancy_removal_clarkson, removes redundant rows from A_in
@@ -191,55 +201,52 @@ SimplifierResult<Point> simplify(ConstrainedPolytope<Point> const& P,
         Ps = pres.polytope;
     }
 
-    for (unsigned pass = 1; pass <= config.max_reduction_passes; ++pass) {
-        // Stage 2: fix degenerate dimensions
-        if (config.fix_dimensions) {
-            std::clock_t c0 = std::clock();
-            auto rres = reduce_polytope(Ps, config.reduce);
-            res.times.reduce += elapsed(c0);
-
-            res.reduce.passes += 1;
-            res.reduce.fixed_vars += rres.fixed_vars;
-            res.reduce.solved_lps += rres.solved_lps;
-            res.solved_lps += rres.solved_lps;
-
-            if (!rres.valid) return fail(SimplifierStatus::INFEASIBLE);
-            Ps = rres.polytope;
-        }
-
-        // Stage 3: dependent equality rows
-        if (config.remove_dependent_rows) {
-            std::clock_t c0 = std::clock();
-            auto dres = remove_dependent_rows(Ps, config.dependent_rows);
-            res.times.dependent_rows += elapsed(c0);
-
-            res.dependent_rows.rank = dres.rank;
-            res.dependent_rows.removed_rows += dres.removed_rows;
-            res.dependent_rows.max_residual = std::max(res.dependent_rows.max_residual, dres.max_residual);
-
-            if (!dres.valid) return fail(SimplifierStatus::REMOVE_DEPENDENT_ROWS_FAILED);
-            Ps = dres.polytope;
-        }
-
-        // Stage 4: Interior point
+    // Stage 2: reduce polytope
+    if (config.reduce_polytope) {
         std::clock_t c0 = std::clock();
-        res.interior_point = find_interior_point(Ps, config.interior_tol);
-        res.times.interior_point += elapsed(c0);
-        res.solved_lps += 1;
+        auto rres = reduce_polytope(Ps, config.reduce);
+        res.times.reduce += elapsed(c0);
 
-        if (!res.interior_point.valid) {
-            if (config.fix_dimensions && pass < config.max_reduction_passes) {
-                continue; // try reducing the polytope again
-            }
-            return fail(SimplifierStatus::NO_INTERIOR_POINT);
-        }
+        res.reduce.implicit_rows = rres.implicit_rows;
+        res.reduce.fixed_vars += rres.fixed_vars;
+        res.reduce.retried_lps = rres.retried_lps;
+        res.reduce.solved_lps += rres.solved_lps;
+        res.solved_lps += rres.solved_lps;
 
-        break; // interior point found
+        if (!rres.valid) return fail(SimplifierStatus::INFEASIBLE);
+        Ps = rres.polytope;
     }
 
-    // Stage 5: Clarkson redundancy removal
+    // Stage 3: dependent equality rows
+    if (config.remove_dependent_rows) {
+        std::clock_t c0 = std::clock();
+        auto dres = remove_dependent_rows(Ps, config.dependent_rows);
+        res.times.dependent_rows += elapsed(c0);
+
+        res.dependent_rows.rank = dres.rank;
+        res.dependent_rows.removed_rows += dres.removed_rows;
+        res.dependent_rows.max_residual = std::max(res.dependent_rows.max_residual, dres.max_residual);
+
+        if (!dres.valid) return fail(SimplifierStatus::REMOVE_DEPENDENT_ROWS_FAILED);
+        Ps = dres.polytope;
+    }
+
+    // Stage 4: Interior point
     std::clock_t c0 = std::clock();
-    auto cres = redundancy_removal_clarkson(Ps, res.interior_point.point, config.clarkson);
+    res.interior_point = find_interior_point(Ps, config.interior_tol);
+    res.times.interior_point += elapsed(c0);
+    res.solved_lps += 1;
+
+    if (!res.interior_point.valid) return fail(SimplifierStatus::NO_INTERIOR_POINT);
+
+    // Stage 5: Clarkson redundancy removal
+    c0 = std::clock();
+
+    // This is a hack to use the naive method, might revert later.
+    auto cres = (config.redundancy == RedundancyMethod::NAIVE)
+              ?  redundancy_removal_naive(Ps, config.clarkson)
+              : redundancy_removal_clarkson(Ps, res.interior_point.point, config.clarkson);
+
     res.times.clarkson = elapsed(c0);
 
     res.clarkson.solved_lps += cres.solved_lps;

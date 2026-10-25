@@ -497,3 +497,8 @@ TARGET_LINK_LIBRARIES(benchmark_simplification_netlib highs::highs nlohmann_json
 TARGET_LINK_LIBRARIES(test_solve_lp highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_vpolyoracles highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(test_zpolyoracles highs::highs coverage_config)
+
+find_library(CDD_LIB cdd REQUIRED)
+add_executable(benchmark_cdd benchmark_cdd.cpp)
+target_link_libraries(benchmark_cdd ${CDD_LIB} highs::highs nlohmann_json::nlohmann_json QD_LIB ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)
+target_compile_definitions(benchmark_cdd PRIVATE BIGG_DIR="${BIGG_DIR}")

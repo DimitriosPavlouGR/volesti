@@ -211,14 +211,24 @@ nlohmann::json construct_json(std::string const& name,
             {"rank", res.presolve.rank}
         }},
         {"reduce", {
-            {"passes", res.reduce.passes},
+            {"implicit_rows", res.reduce.implicit_rows},
             {"fixed_vars", res.reduce.fixed_vars},
-            {"solved_lps", res.reduce.solved_lps}
+            {"solved_lps", res.reduce.solved_lps},
+            {"retried_lps", res.reduce.retried_lps},
         }},
         {"dependent_rows", {
             {"rank", res.dependent_rows.rank},
             {"removed_rows", res.dependent_rows.removed_rows},
             {"max_residual", res.dependent_rows.max_residual}
+        }},
+        {"interior_point", {
+            {"slack", res.interior_point.slack},
+            {"found", res.interior_point.valid}
+        }},
+        {"clarkson", {
+            {"solved_lps", res.clarkson.solved_lps},
+            {"retried_lps", res.clarkson.retried_lps},
+            {"untested_rows", res.clarkson.untested_rows},
         }},
         {"stage_times", {
             {"presolve", res.times.presolve},

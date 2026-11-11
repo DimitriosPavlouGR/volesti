@@ -272,6 +272,17 @@ add_test(NAME volume_sob_hpolytope_skinny_cube COMMAND volume_sob_hpolytope -tc=
 add_test(NAME volume_sob_hpolytope_cube_overflow COMMAND volume_sob_hpolytope -tc=cube_overflow)
 set_property(TEST volume_sob_hpolytope_cube_overflow PROPERTY TIMEOUT 1)
 
+add_executable (standalone_headers_test standalone_headers_test.cpp $<TARGET_OBJECTS:test_main>)
+target_compile_definitions(standalone_headers_test PRIVATE DISABLE_HIGHS)
+add_test(NAME standalone_headers_accelerated_billiard COMMAND standalone_headers_test -tc=accelerated_billiard)
+
+add_executable (crhmc_volume_edge_cases_test crhmc_volume_edge_cases_test.cpp $<TARGET_OBJECTS:test_main>)
+add_test(NAME crhmc_volume_edge_cases_inner_ball_failure COMMAND crhmc_volume_edge_cases_test -tc=crhmc_inner_ball_failure)
+
+add_executable (interrupt_hook_test interrupt_hook_test.cpp $<TARGET_OBJECTS:test_main>)
+add_test(NAME interrupt_hook_called_once_per_step COMMAND interrupt_hook_test -tc=hook_called_once_per_step)
+add_test(NAME interrupt_hook_interrupt COMMAND interrupt_hook_test -tc=interrupt)
+
 add_executable (volume_sob_vpolytope volume_sob_vpolytope.cpp $<TARGET_OBJECTS:test_main>)
 add_test(NAME volume_sob_vpolytope_cube COMMAND volume_sob_vpolytope -tc=cube)
 add_test(NAME volume_sob_vpolytope_cross COMMAND volume_sob_vpolytope -tc=cross)
@@ -491,6 +502,9 @@ TARGET_LINK_LIBRARIES(crhmc_sampling_test highs::highs ${IFOPT} ${IFOPT_IPOPT} $
 TARGET_LINK_LIBRARIES(order_polytope highs::highs coverage_config)
 TARGET_LINK_LIBRARIES(matrix_sampling_test highs::highs ${MKL_LINK} coverage_config)
 TARGET_LINK_LIBRARIES(test_internal_points highs::highs ${MKL_LINK} coverage_config)
+TARGET_LINK_LIBRARIES(interrupt_hook_test highs::highs ${MKL_LINK} coverage_config)
+TARGET_LINK_LIBRARIES(standalone_headers_test ${MKL_LINK} coverage_config)
+TARGET_LINK_LIBRARIES(crhmc_volume_edge_cases_test highs::highs ${PTHREAD} ${GMP} ${MPSOLVE} ${FFTW3} ${MKL_LINK} QD_LIB coverage_config)
 find_package(LAPACK REQUIRED)
 find_package(BLAS REQUIRED)
 TARGET_LINK_LIBRARIES(full_dimensional_polytope_test highs::highs ${SUITESPARSE_LIBRARIES} ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${MKL_LINK} coverage_config)

@@ -17,6 +17,8 @@
 #define HPOLYTOPE_H
 
 #include <limits>
+#include <stdexcept>
+#include <vector>
 #include <iostream>
 #include <Eigen/Eigen>
 #include "preprocess/max_inscribed_ball.hpp"

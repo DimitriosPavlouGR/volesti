@@ -102,7 +102,6 @@ public:
             }
         }
         has_ball = false;
-        //_inner_ball = ComputeChebychevBall<NT, Point>(A, b);
     }
 
 
@@ -142,6 +141,7 @@ public:
     //Compute Chebyshev ball of H-polytope P:= Ax<=b
     //First try using max_inscribed_ball
     //Use HiGHS library if it fails
+    //On failure the returned radius is negative (callers check second < 0)
     std::pair<Point, NT> ComputeInnerBall()
     {
         normalize();
@@ -162,12 +162,12 @@ public:
                     if (ball.solved) {
                         _inner_ball = ball.value;
                     } else {
+                        _inner_ball = std::pair<Point, NT>(Point(_d), NT(-1));
                         std::cerr << "Failed to compute the chebychev ball" << std::endl;
-                        has_ball = false;
                     }
                 #else
-                    std::cerr << "HiGHS is disabled, unable to compute inner ball";
-                    has_ball = false;
+                    std::cerr << "HiGHS is disabled, unable to compute inner ball" << std::endl;
+                    _inner_ball = std::pair<Point, NT>(Point(_d), NT(-1));
                 #endif
             } else {
                 _inner_ball.first = Point(std::get<0>(inner_ball));

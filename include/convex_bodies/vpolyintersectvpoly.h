@@ -133,7 +133,7 @@ public:
         rng.set_seed(seed);
         auto res = point_in_intersection<VT>(P1.get_mat(), P2.get_mat(),
                                              GetDirection<Point>::apply(k, rng));
-        return !res.value.second;
+        return res.solved && !res.value.second;
     }
 
     std::pair<Point,NT> ComputeInnerBall() {
@@ -148,11 +148,20 @@ public:
         std::vector<Point> vertices;
         typename std::vector<Point>::iterator rvert;
         bool same;
+        unsigned attempts = 0;
+        unsigned max_attempts = 100*d;
 
         while(num<d+1){
 
+            if (++attempts > max_attempts) {
+                _inner_ball = std::pair<Point, NT>(Point(d), NT(-1));
+                return _inner_ball;
+            }
+
             direction = GetDirection<Point>::apply(k, rng);
             auto res = point_in_intersection<VT>(V1, V2, direction);
+            if (!res.solved) continue;
+
             p = res.value.first;
             same = false;
             rvert = vertices.begin();
